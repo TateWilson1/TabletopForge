@@ -1,0 +1,146 @@
+import { scenarioContent } from "@/lib/tabletop-data";
+import type { ExerciseOptions, GeneratedExercise, LessonsLearnedItem } from "@/lib/types";
+
+const baseParticipants = [
+  "Facilitator",
+  "IT/Security Lead",
+  "Help Desk",
+  "Executive Sponsor",
+  "HR",
+  "Legal/Compliance",
+  "Communications/Public Relations",
+  "Department Manager",
+];
+
+const facilitatorNotes = [
+  "Keep the discussion focused on process, ownership, and decision points rather than blame.",
+  "Ask who owns each action and where that ownership is documented.",
+  "Capture unclear answers as improvement items in the after-action notes.",
+  "Avoid getting too technical unless the group is ready for that level of detail.",
+  "End with specific action items, owners, due dates, and priority levels.",
+];
+
+const lessonsLearnedTemplate: LessonsLearnedItem[] = [
+  { prompt: "What worked well?" },
+  { prompt: "What was unclear?" },
+  { prompt: "What slowed the response?" },
+  { prompt: "What policy or procedure needs updated?" },
+  { prompt: "What communication gaps were found?" },
+  { prompt: "What training is needed?" },
+  { prompt: "Action item", owner: "", dueDate: "", priority: "" },
+];
+
+export function generateExercise(options: ExerciseOptions): GeneratedExercise {
+  const content = scenarioContent[options.scenarioType];
+  const participants = [...baseParticipants];
+
+  if (options.industry === "MSP / IT Provider" || options.scenarioType === "Vendor / Third-Party Breach") {
+    participants.push("Vendor/MSP Contact");
+  }
+
+  const discussionQuestions = buildQuestionSet([
+    ...content.discussionQuestions,
+    ...(options.includeExecutiveQuestions ? content.executiveQuestions : []),
+    ...(options.includeTechnicalQuestions ? content.technicalQuestions : []),
+  ]);
+
+  const gapDiscoveryQuestions = buildQuestionSet([
+    ...content.gapQuestions,
+    ...(options.includeComplianceQuestions ? content.complianceQuestions : []),
+  ]);
+
+  const generatedAt = new Date().toISOString();
+  const organization = options.organizationName.trim();
+  const overview = {
+    organization,
+    industry: options.industry,
+    organizationSize: options.organizationSize,
+    scenario: options.scenarioType,
+    duration: options.exerciseDuration,
+    maturityLevel: options.maturityLevel,
+    purpose: `Help ${organization} validate incident response roles, communications, evidence expectations, and decision authority for a ${options.scenarioType.toLowerCase()} scenario at a ${options.maturityLevel.toLowerCase()} maturity level.`,
+  };
+
+  const exerciseWithoutMarkdown = {
+    id: crypto.randomUUID(),
+    generatedAt,
+    overview,
+    scenarioSummary: content.summary({ ...options, organizationName: organization }),
+    objectives: tuneByMaturity(content.objectives, options.maturityLevel),
+    suggestedParticipants: participants,
+    discussionQuestions,
+    gapDiscoveryQuestions,
+    expectedDecisions: content.expectedDecisions,
+    facilitatorNotes,
+    lessonsLearnedTemplate: options.includeLessonsLearned ? lessonsLearnedTemplate : undefined,
+    executiveSummary: `${organization} will walk through a realistic ${options.scenarioType.toLowerCase()} tabletop exercise designed for ${options.industry.toLowerCase()} organizations with ${options.organizationSize} employees. The discussion should reveal whether the incident response plan clearly defines escalation, containment authority, communications, evidence handling, and after-action ownership without requiring a deeply technical exercise format.`,
+  };
+
+  const markdownReport = createMarkdownReport(exerciseWithoutMarkdown);
+
+  return {
+    ...exerciseWithoutMarkdown,
+    markdownReport,
+  };
+}
+
+function buildQuestionSet(questions: string[]) {
+  return Array.from(new Set(questions)).slice(0, 12);
+}
+
+function tuneByMaturity(objectives: string[], maturityLevel: ExerciseOptions["maturityLevel"]) {
+  if (maturityLevel === "Basic") {
+    return objectives.slice(0, 4);
+  }
+
+  if (maturityLevel === "Intermediate") {
+    return objectives.slice(0, 5);
+  }
+
+  return objectives;
+}
+
+function createMarkdownReport(exercise: Omit<GeneratedExercise, "markdownReport">) {
+  const lines = [
+    `# ${exercise.overview.organization} Tabletop Exercise`,
+    "",
+    "## Exercise Overview",
+    `- Organization: ${exercise.overview.organization}`,
+    `- Industry: ${exercise.overview.industry}`,
+    `- Organization size: ${exercise.overview.organizationSize}`,
+    `- Scenario: ${exercise.overview.scenario}`,
+    `- Duration: ${exercise.overview.duration}`,
+    `- Maturity level: ${exercise.overview.maturityLevel}`,
+    `- Purpose: ${exercise.overview.purpose}`,
+    "",
+    "## Scenario Summary",
+    exercise.scenarioSummary,
+    "",
+    listSection("Exercise Objectives", exercise.objectives),
+    listSection("Suggested Participants", exercise.suggestedParticipants),
+    listSection("Discussion Questions", exercise.discussionQuestions),
+    listSection("IRP Gap Discovery Questions", exercise.gapDiscoveryQuestions),
+    listSection("Expected Decisions", exercise.expectedDecisions),
+    listSection("Facilitator Notes", exercise.facilitatorNotes),
+  ];
+
+  if (exercise.lessonsLearnedTemplate) {
+    lines.push("## Lessons Learned Template");
+    lines.push("| Prompt | Owner | Due date | Priority |");
+    lines.push("| --- | --- | --- | --- |");
+    exercise.lessonsLearnedTemplate.forEach((item) => {
+      lines.push(`| ${item.prompt} | ${item.owner ?? ""} | ${item.dueDate ?? ""} | ${item.priority ?? ""} |`);
+    });
+    lines.push("");
+  }
+
+  lines.push("## Executive Summary");
+  lines.push(exercise.executiveSummary);
+  lines.push("");
+
+  return lines.join("\n");
+}
+
+function listSection(title: string, items: string[]) {
+  return [`## ${title}`, ...items.map((item) => `- ${item}`), ""].join("\n");
+}

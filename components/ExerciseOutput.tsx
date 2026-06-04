@@ -1,0 +1,210 @@
+"use client";
+
+import { useState } from "react";
+import { Clipboard, Download, FileText, Save } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
+import { saveExercise } from "@/lib/storage";
+import type { GeneratedExercise } from "@/lib/types";
+
+export function ExerciseOutput({
+  exercise,
+  emptyTitle,
+}: {
+  exercise: GeneratedExercise | null;
+  emptyTitle?: string;
+}) {
+  const [copyNotice, setCopyNotice] = useState("");
+
+  if (!exercise) {
+    return (
+      <Card className="flex min-h-[560px] items-center justify-center bg-card/55">
+        <CardContent className="max-w-md p-8 text-center">
+          <FileText className="mx-auto mb-4 size-10 text-primary" />
+          <h2 className="text-xl font-semibold">{emptyTitle ?? "No exercise selected"}</h2>
+          <p className="mt-3 text-sm leading-6 text-muted-foreground">
+            Generated tabletop packages include an overview, scenario summary, objectives, participants, discussion prompts, IRP gap questions, decisions, facilitator notes, and exportable Markdown.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  async function handleCopy() {
+    if (!exercise) {
+      return;
+    }
+
+    await navigator.clipboard.writeText(exercise.markdownReport);
+    setCopyNotice("Markdown copied to clipboard.");
+  }
+
+  function handleDownload() {
+    if (!exercise) {
+      return;
+    }
+
+    const blob = new Blob([exercise.markdownReport], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${exercise.overview.organization.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}-tabletop.md`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function handleSave() {
+    if (!exercise) {
+      return;
+    }
+
+    saveExercise(exercise);
+    setCopyNotice("Exercise saved in this browser.");
+  }
+
+  return (
+    <Card className="bg-card/80">
+      <CardHeader>
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+          <div>
+            <CardTitle>{exercise.overview.organization} Tabletop Package</CardTitle>
+            <CardDescription className="mt-2">
+              {exercise.overview.scenario} · {exercise.overview.duration} · {exercise.overview.maturityLevel}
+            </CardDescription>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" onClick={handleCopy}>
+              <Clipboard className="size-4" />
+              Copy Markdown
+            </Button>
+            <Button variant="outline" onClick={handleDownload}>
+              <Download className="size-4" />
+              Download Markdown
+            </Button>
+            <Button variant="secondary" onClick={handleSave}>
+              <Save className="size-4" />
+              Save
+            </Button>
+          </div>
+        </div>
+        {copyNotice ? <p className="text-sm text-primary">{copyNotice}</p> : null}
+      </CardHeader>
+      <CardContent>
+        <Tabs defaultValue="report">
+          <TabsList className="flex h-auto flex-wrap justify-start">
+            <TabsTrigger value="report">Report</TabsTrigger>
+            <TabsTrigger value="questions">Questions</TabsTrigger>
+            <TabsTrigger value="markdown">Markdown</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="report" className="space-y-6">
+            <Section title="Exercise Overview">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Meta label="Industry" value={exercise.overview.industry} />
+                <Meta label="Organization size" value={exercise.overview.organizationSize} />
+                <Meta label="Scenario" value={exercise.overview.scenario} />
+                <Meta label="Maturity" value={exercise.overview.maturityLevel} />
+              </div>
+              <p className="mt-4 leading-7 text-muted-foreground">{exercise.overview.purpose}</p>
+            </Section>
+
+            <Section title="Scenario Summary">
+              <p className="leading-7 text-muted-foreground">{exercise.scenarioSummary}</p>
+            </Section>
+
+            <ListSection title="Exercise Objectives" items={exercise.objectives} />
+            <ListSection title="Suggested Participants" items={exercise.suggestedParticipants} badge />
+            <ListSection title="Expected Decisions" items={exercise.expectedDecisions} />
+            <ListSection title="Facilitator Notes" items={exercise.facilitatorNotes} />
+
+            {exercise.lessonsLearnedTemplate ? (
+              <Section title="Lessons Learned Template">
+                <div className="overflow-hidden rounded-md border border-border">
+                  <div className="grid grid-cols-[1fr_0.55fr_0.55fr_0.45fr] bg-muted px-3 py-2 text-xs font-semibold text-muted-foreground">
+                    <span>Prompt</span>
+                    <span>Owner</span>
+                    <span>Due date</span>
+                    <span>Priority</span>
+                  </div>
+                  {exercise.lessonsLearnedTemplate.map((item) => (
+                    <div
+                      key={item.prompt}
+                      className="grid grid-cols-[1fr_0.55fr_0.55fr_0.45fr] border-t border-border px-3 py-3 text-sm"
+                    >
+                      <span>{item.prompt}</span>
+                      <span>{item.owner}</span>
+                      <span>{item.dueDate}</span>
+                      <span>{item.priority}</span>
+                    </div>
+                  ))}
+                </div>
+              </Section>
+            ) : null}
+
+            <Section title="Executive Summary">
+              <p className="leading-7 text-muted-foreground">{exercise.executiveSummary}</p>
+            </Section>
+          </TabsContent>
+
+          <TabsContent value="questions" className="grid gap-6 xl:grid-cols-2">
+            <ListSection title="Discussion Questions" items={exercise.discussionQuestions} />
+            <ListSection title="IRP Gap Discovery Questions" items={exercise.gapDiscoveryQuestions} />
+          </TabsContent>
+
+          <TabsContent value="markdown">
+            <Textarea readOnly value={exercise.markdownReport} className="min-h-[620px] font-mono text-xs leading-5" />
+          </TabsContent>
+        </Tabs>
+      </CardContent>
+    </Card>
+  );
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section>
+      <div className="mb-3 flex items-center gap-3">
+        <h3 className="text-lg font-semibold tracking-normal">{title}</h3>
+        <Separator className="flex-1" />
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function ListSection({ title, items, badge = false }: { title: string; items: string[]; badge?: boolean }) {
+  return (
+    <Section title={title}>
+      {badge ? (
+        <div className="flex flex-wrap gap-2">
+          {items.map((item) => (
+            <Badge key={item} variant="secondary">
+              {item}
+            </Badge>
+          ))}
+        </div>
+      ) : (
+        <ul className="space-y-2">
+          {items.map((item) => (
+            <li key={item} className="rounded-md border border-border bg-background/45 p-3 text-sm leading-6 text-muted-foreground">
+              {item}
+            </li>
+          ))}
+        </ul>
+      )}
+    </Section>
+  );
+}
+
+function Meta({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-border bg-background/45 p-3">
+      <p className="text-xs uppercase text-muted-foreground">{label}</p>
+      <p className="mt-1 text-sm font-medium">{value}</p>
+    </div>
+  );
+}
