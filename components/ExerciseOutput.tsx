@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Clipboard, Download, FileText, Save } from "lucide-react";
+import { FacilitatorSession } from "@/components/FacilitatorSession";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -94,12 +95,17 @@ export function ExerciseOutput({
         {copyNotice ? <p className="text-sm text-primary">{copyNotice}</p> : null}
       </CardHeader>
       <CardContent>
-        <Tabs defaultValue="report">
+        <Tabs defaultValue="facilitator">
           <TabsList className="flex h-auto flex-wrap justify-start">
+            <TabsTrigger value="facilitator">Facilitator</TabsTrigger>
             <TabsTrigger value="report">Report</TabsTrigger>
             <TabsTrigger value="questions">Questions</TabsTrigger>
             <TabsTrigger value="markdown">Markdown</TabsTrigger>
           </TabsList>
+
+          <TabsContent value="facilitator">
+            <FacilitatorSession exercise={exercise} />
+          </TabsContent>
 
           <TabsContent value="report" className="space-y-6">
             <Section title="Exercise Overview">
