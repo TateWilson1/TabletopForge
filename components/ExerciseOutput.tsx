@@ -73,7 +73,7 @@ export function ExerciseOutput({
           <div>
             <CardTitle>{exercise.overview.organization} Tabletop Package</CardTitle>
             <CardDescription className="mt-2">
-              {exercise.overview.scenario} · {exercise.overview.duration} · {exercise.overview.maturityLevel}
+              {exercise.overview.scenario} - {exercise.overview.duration} - {exercise.overview.maturityLevel}
             </CardDescription>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -118,6 +118,7 @@ export function ExerciseOutput({
 
             <ListSection title="Exercise Objectives" items={exercise.objectives} />
             <ListSection title="Suggested Participants" items={exercise.suggestedParticipants} badge />
+            {exercise.irpAnalysis ? <IrpAnalysisSection exercise={exercise} /> : null}
             <ListSection title="Expected Decisions" items={exercise.expectedDecisions} />
             <ListSection title="Facilitator Notes" items={exercise.facilitatorNotes} />
 
@@ -173,6 +174,61 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       </div>
       {children}
     </section>
+  );
+}
+
+function IrpAnalysisSection({ exercise }: { exercise: GeneratedExercise }) {
+  if (!exercise.irpAnalysis) {
+    return null;
+  }
+
+  const focusFindings = exercise.irpAnalysis.findings.filter((finding) => finding.status !== "found");
+
+  return (
+    <Section title="IRP Gap Analysis">
+      <div className="space-y-4">
+        <div className="rounded-md border border-primary/30 bg-primary/10 p-4">
+          <div className="flex flex-wrap gap-2">
+            <Badge variant="outline">{exercise.irpAnalysis.sourceName ?? "Pasted IRP text"}</Badge>
+            <Badge variant="outline">{exercise.irpAnalysis.wordCount} words analyzed</Badge>
+            <Badge variant="outline">{focusFindings.length} focus gaps</Badge>
+          </div>
+          <p className="mt-3 text-sm leading-6 text-muted-foreground">{exercise.irpAnalysis.overallSummary}</p>
+        </div>
+
+        {exercise.irpAnalysis.strengths.length > 0 ? (
+          <div>
+            <p className="mb-2 text-sm font-medium">Apparent strengths</p>
+            <div className="flex flex-wrap gap-2">
+              {exercise.irpAnalysis.strengths.map((strength) => (
+                <Badge key={strength} variant="secondary">
+                  {strength}
+                </Badge>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        <div className="grid gap-3">
+          {focusFindings.length > 0 ? (
+            focusFindings.map((finding) => (
+              <div key={finding.id} className="rounded-md border border-border bg-background/45 p-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="font-medium">{finding.label}</p>
+                  <Badge variant={finding.status === "missing" ? "outline" : "secondary"}>{finding.status}</Badge>
+                </div>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">{finding.summary}</p>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">{finding.improvement}</p>
+              </div>
+            ))
+          ) : (
+            <div className="rounded-md border border-border bg-background/45 p-4 text-sm leading-6 text-muted-foreground">
+              No major missing areas were identified by the local scan. Use the exercise to validate whether the documented plan works in practice.
+            </div>
+          )}
+        </div>
+      </div>
+    </Section>
   );
 }
 

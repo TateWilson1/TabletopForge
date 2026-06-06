@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Wand2 } from "lucide-react";
+import { FileText, Wand2, X } from "lucide-react";
 import { ExerciseOutput } from "@/components/ExerciseOutput";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
+import { Textarea } from "@/components/ui/textarea";
 import { generateExercise } from "@/lib/generator";
 import { saveExercise } from "@/lib/storage";
 import {
@@ -34,6 +35,8 @@ const defaultOptions: ExerciseOptions = {
   includeTechnicalQuestions: false,
   includeComplianceQuestions: true,
   includeLessonsLearned: true,
+  irpText: "",
+  irpFileName: "",
 };
 
 export function ExerciseForm() {
@@ -41,6 +44,7 @@ export function ExerciseForm() {
   const [exercise, setExercise] = useState<GeneratedExercise | null>(null);
   const [error, setError] = useState("");
   const [savedNotice, setSavedNotice] = useState("");
+  const [irpNotice, setIrpNotice] = useState("");
 
   const canGenerate = useMemo(() => options.organizationName.trim().length >= 2, [options.organizationName]);
 
@@ -48,6 +52,28 @@ export function ExerciseForm() {
     setOptions((current) => ({ ...current, [key]: value }));
     setError("");
     setSavedNotice("");
+  }
+
+  async function handleIrpUpload(file: File | undefined) {
+    if (!file) {
+      return;
+    }
+
+    if (file.size > 750_000) {
+      setError("Upload an IRP text file smaller than 750 KB, or paste a shorter excerpt.");
+      return;
+    }
+
+    const text = await file.text();
+    updateOption("irpText", text);
+    updateOption("irpFileName", file.name);
+    setIrpNotice(`Loaded ${file.name}. The full IRP text stays in this browser and is not saved.`);
+  }
+
+  function clearIrp() {
+    updateOption("irpText", "");
+    updateOption("irpFileName", "");
+    setIrpNotice("");
   }
 
   function handleGenerate() {
@@ -117,6 +143,60 @@ export function ExerciseForm() {
               values={exerciseDurations}
               onChange={(value) => updateOption("exerciseDuration", value)}
             />
+          </div>
+
+          <Separator />
+
+          <div className="space-y-4 rounded-lg border border-border bg-background/40 p-4">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <Label>Incident response plan</Label>
+                <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                  Upload a plain-text IRP or paste text from a PDF/Word document to tailor questions around likely gaps.
+                </p>
+              </div>
+              {options.irpText ? (
+                <Button variant="ghost" size="sm" onClick={clearIrp}>
+                  <X className="size-4" />
+                  Clear
+                </Button>
+              ) : null}
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-[0.72fr_1.28fr]">
+              <div className="space-y-2">
+                <Label htmlFor="irpFile">Upload IRP text</Label>
+                <Input
+                  id="irpFile"
+                  type="file"
+                  accept=".txt,.md,.rtf,.csv,text/plain,text/markdown"
+                  onChange={(event) => handleIrpUpload(event.target.files?.[0])}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="irpText">Paste IRP text</Label>
+                <Textarea
+                  id="irpText"
+                  value={options.irpText}
+                  onChange={(event) => {
+                    updateOption("irpText", event.target.value);
+                    updateOption("irpFileName", event.target.value.trim() ? "Pasted IRP text" : "");
+                    setIrpNotice("");
+                  }}
+                  placeholder="Paste IRP sections here, such as roles, severity levels, communications, containment, evidence, legal/compliance, recovery, and after-action review."
+                  className="min-h-[140px]"
+                />
+              </div>
+            </div>
+
+            {options.irpText ? (
+              <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+                <FileText className="size-4 text-primary" />
+                <span>{options.irpFileName || "IRP text loaded"}</span>
+                <span>{Math.max(1, options.irpText.trim().split(/\s+/).filter(Boolean).length)} words</span>
+              </div>
+            ) : null}
+            {irpNotice ? <p className="text-sm text-primary">{irpNotice}</p> : null}
           </div>
 
           <Separator />

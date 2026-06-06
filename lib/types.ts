@@ -49,6 +49,8 @@ export interface ExerciseOptions {
   includeTechnicalQuestions: boolean;
   includeComplianceQuestions: boolean;
   includeLessonsLearned: boolean;
+  irpText?: string;
+  irpFileName?: string;
 }
 
 export interface LessonsLearnedItem {
@@ -77,7 +79,27 @@ export interface GeneratedExercise {
   gapDiscoveryQuestions: string[];
   expectedDecisions: string[];
   facilitatorNotes: string[];
+  irpAnalysis?: IrpAnalysis;
   lessonsLearnedTemplate?: LessonsLearnedItem[];
   executiveSummary: string;
   markdownReport: string;
+}
+
+export interface IrpGapFinding {
+  id: string;
+  label: string;
+  status: "found" | "weak" | "missing";
+  summary: string;
+  evidence: string[];
+  tailoredQuestions: string[];
+  improvement: string;
+}
+
+export interface IrpAnalysis {
+  sourceName?: string;
+  analyzedAt: string;
+  wordCount: number;
+  overallSummary: string;
+  strengths: string[];
+  findings: IrpGapFinding[];
 }

@@ -1,4 +1,5 @@
 import { scenarioContent } from "@/lib/tabletop-data";
+import { analyzeIrp, getTailoredIrpQuestions } from "@/lib/irp-analyzer";
 import type { ExerciseOptions, GeneratedExercise, LessonsLearnedItem } from "@/lib/types";
 
 const baseParticipants = [
@@ -32,6 +33,8 @@ const lessonsLearnedTemplate: LessonsLearnedItem[] = [
 
 export function generateExercise(options: ExerciseOptions): GeneratedExercise {
   const content = scenarioContent[options.scenarioType];
+  const irpAnalysis = analyzeIrp(options.irpText ?? "", options.irpFileName);
+  const tailoredIrpQuestions = getTailoredIrpQuestions(irpAnalysis);
   const participants = [...baseParticipants];
 
   if (options.industry === "MSP / IT Provider" || options.scenarioType === "Vendor / Third-Party Breach") {
@@ -39,12 +42,14 @@ export function generateExercise(options: ExerciseOptions): GeneratedExercise {
   }
 
   const discussionQuestions = buildQuestionSet([
+    ...tailoredIrpQuestions.discussionQuestions,
     ...content.discussionQuestions,
     ...(options.includeExecutiveQuestions ? content.executiveQuestions : []),
     ...(options.includeTechnicalQuestions ? content.technicalQuestions : []),
   ]);
 
   const gapDiscoveryQuestions = buildQuestionSet([
+    ...tailoredIrpQuestions.gapQuestions,
     ...content.gapQuestions,
     ...(options.includeComplianceQuestions ? content.complianceQuestions : []),
   ]);
@@ -66,14 +71,21 @@ export function generateExercise(options: ExerciseOptions): GeneratedExercise {
     generatedAt,
     overview,
     scenarioSummary: content.summary({ ...options, organizationName: organization }),
-    objectives: tuneByMaturity(content.objectives, options.maturityLevel),
+    objectives: tuneByMaturity(
+      [
+        ...(irpAnalysis ? ["Validate whether known IRP gaps would slow or weaken the response."] : []),
+        ...content.objectives,
+      ],
+      options.maturityLevel,
+    ),
     suggestedParticipants: participants,
     discussionQuestions,
     gapDiscoveryQuestions,
     expectedDecisions: content.expectedDecisions,
     facilitatorNotes,
+    irpAnalysis,
     lessonsLearnedTemplate: options.includeLessonsLearned ? lessonsLearnedTemplate : undefined,
-    executiveSummary: `${organization} will walk through a realistic ${options.scenarioType.toLowerCase()} tabletop exercise designed for ${options.industry.toLowerCase()} organizations with ${options.organizationSize} employees. The discussion should reveal whether the incident response plan clearly defines escalation, containment authority, communications, evidence handling, and after-action ownership without requiring a deeply technical exercise format.`,
+    executiveSummary: `${organization} will walk through a realistic ${options.scenarioType.toLowerCase()} tabletop exercise designed for ${options.industry.toLowerCase()} organizations with ${options.organizationSize} employees. The discussion should reveal whether the incident response plan clearly defines escalation, containment authority, communications, evidence handling, and after-action ownership without requiring a deeply technical exercise format.${irpAnalysis ? ` The uploaded IRP scan found ${irpAnalysis.findings.filter((finding) => finding.status !== "found").length} likely weak or missing areas, so the questions emphasize those plan gaps.` : ""}`,
   };
 
   const markdownReport = createMarkdownReport(exerciseWithoutMarkdown);
@@ -118,6 +130,7 @@ function createMarkdownReport(exercise: Omit<GeneratedExercise, "markdownReport"
     "",
     listSection("Exercise Objectives", exercise.objectives),
     listSection("Suggested Participants", exercise.suggestedParticipants),
+    irpAnalysisSection(exercise.irpAnalysis),
     listSection("Discussion Questions", exercise.discussionQuestions),
     listSection("IRP Gap Discovery Questions", exercise.gapDiscoveryQuestions),
     listSection("Expected Decisions", exercise.expectedDecisions),
@@ -143,4 +156,35 @@ function createMarkdownReport(exercise: Omit<GeneratedExercise, "markdownReport"
 
 function listSection(title: string, items: string[]) {
   return [`## ${title}`, ...items.map((item) => `- ${item}`), ""].join("\n");
+}
+
+function irpAnalysisSection(analysis: GeneratedExercise["irpAnalysis"]) {
+  if (!analysis) {
+    return "";
+  }
+
+  const lines = [
+    "## IRP Gap Analysis",
+    `- Source: ${analysis.sourceName ?? "Pasted IRP text"}`,
+    `- Words analyzed: ${analysis.wordCount}`,
+    `- Summary: ${analysis.overallSummary}`,
+    "",
+  ];
+
+  if (analysis.strengths.length > 0) {
+    lines.push("### Apparent Strengths");
+    analysis.strengths.forEach((strength) => lines.push(`- ${strength}`));
+    lines.push("");
+  }
+
+  lines.push("### Findings");
+  analysis.findings
+    .filter((finding) => finding.status !== "found")
+    .forEach((finding) => {
+      lines.push(`- ${finding.label} (${finding.status}): ${finding.summary}`);
+      lines.push(`  - Improvement: ${finding.improvement}`);
+    });
+  lines.push("");
+
+  return lines.join("\n");
 }

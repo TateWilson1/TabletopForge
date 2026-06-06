@@ -11,6 +11,7 @@ Tagline: "Simple incident response tabletop exercises for real-world readiness."
 - Scenario builder for phishing/BEC, ransomware, data exfiltration, compromised admin accounts, lost laptops, vendor breaches, insider threats, and cloud misconfiguration
 - Organization profile fields for industry, size, maturity level, duration, and optional question sets
 - Realistic scenario summaries, objectives, suggested participants, discussion questions, IRP gap-discovery questions, expected decisions, facilitator notes, and executive summaries
+- Local IRP upload or paste analysis that adjusts tabletop questions around likely plan gaps
 - Optional lessons-learned template with action item, owner, due date, and priority prompts
 - Copyable and downloadable Markdown reports
 - Browser-based saved exercises with LocalStorage
@@ -24,6 +25,7 @@ Tagline: "Simple incident response tabletop exercises for real-world readiness."
 - shadcn/ui-style components
 - App Router
 - LocalStorage
+- Local browser-only IRP text analysis
 
 ## Run Locally
 
@@ -47,6 +49,7 @@ npm run build
 - An MSP wants a simple ransomware tabletop for a client leadership team.
 - A cybersecurity student wants a realistic IR planning artifact for a portfolio.
 - An IT manager wants to discover missing communication templates and unclear containment authority.
+- A security lead wants to upload an IRP excerpt and generate questions that target missing severity, communications, containment, evidence, or recovery procedures.
 
 ## Resume Bullet
 
@@ -56,6 +59,7 @@ npm run build
 
 - PDF export
 - Custom scenario authoring
+- AI-assisted IRP interpretation and facilitator injects
 - Exercise scoring and maturity recommendations
 - Shared team workspaces
 - More compliance-specific report templates
