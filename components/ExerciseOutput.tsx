@@ -114,6 +114,10 @@ export function ExerciseOutput({
                 <Meta label="Organization size" value={exercise.overview.organizationSize} />
                 <Meta label="Scenario" value={exercise.overview.scenario} />
                 <Meta label="Maturity" value={exercise.overview.maturityLevel} />
+                <Meta
+                  label="Session mode"
+                  value={exercise.overview.hasHumanFacilitator ? "Human facilitator assisted" : "TabletopForge facilitated"}
+                />
               </div>
               <p className="mt-4 leading-7 text-muted-foreground">{exercise.overview.purpose}</p>
             </Section>

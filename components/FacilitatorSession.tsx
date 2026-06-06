@@ -37,6 +37,7 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
 
   const activeStep = steps[activeIndex];
   const progress = Math.round(((activeIndex + 1) / steps.length) * 100);
+  const hasHumanFacilitator = exercise.overview.hasHumanFacilitator;
 
   function revealInject() {
     const nextInject = activeStep.injects.find((inject) => !revealedInjects.includes(inject));
@@ -76,7 +77,10 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
           <CardHeader>
             <div className="flex items-center justify-between gap-3">
               <CardTitle className="text-lg">Session Flow</CardTitle>
-              <Badge variant="outline">{progress}%</Badge>
+              <Badge variant="outline">{hasHumanFacilitator ? "Human-led" : "App-led"}</Badge>
+            </div>
+            <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted">
+              <div className="h-full bg-primary transition-all" style={{ width: `${progress}%` }} />
             </div>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -123,14 +127,14 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
             <section className="rounded-md border border-primary/30 bg-primary/10 p-4">
               <div className="mb-2 flex items-center gap-2 text-sm font-medium text-primary">
                 <Sparkles className="size-4" />
-                Facilitator Script
+                {hasHumanFacilitator ? "Facilitator Script" : "TabletopForge Facilitator"}
               </div>
               <p className="leading-7 text-muted-foreground">{activeStep.facilitatorScript}</p>
             </section>
 
             <div className="grid gap-4 lg:grid-cols-2">
-              <PromptList title="Ask The Room" items={activeStep.prompts} />
-              <PromptList title="Decisions To Capture" items={activeStep.decisions} />
+              <PromptList title={hasHumanFacilitator ? "Ask The Room" : "Discuss This Now"} items={activeStep.prompts} />
+              <PromptList title={hasHumanFacilitator ? "Decisions To Capture" : "Decide Before Moving On"} items={activeStep.decisions} />
             </div>
 
             <Separator />
@@ -140,12 +144,14 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
                 <div>
                   <h3 className="font-semibold">Injects</h3>
                   <p className="mt-1 text-sm text-muted-foreground">
-                    Reveal a new development when discussion slows or when the team needs pressure.
+                    {hasHumanFacilitator
+                      ? "Reveal a new development when discussion slows or when the team needs pressure."
+                      : "Use this when the team is ready for the situation to evolve."}
                   </p>
                 </div>
                 <Button onClick={revealInject} disabled={activeStep.injects.every((inject) => revealedInjects.includes(inject))}>
                   <Sparkles className="size-4" />
-                  Reveal Inject
+                  {hasHumanFacilitator ? "Reveal Inject" : "Reveal Next Development"}
                 </Button>
               </div>
 
@@ -168,12 +174,16 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
                 <Textarea
                   value={customInject}
                   onChange={(event) => setCustomInject(event.target.value)}
-                  placeholder="Add your own inject, such as: The CEO asks whether customers need to be notified by end of day."
+                  placeholder={
+                    hasHumanFacilitator
+                      ? "Add your own inject, such as: The CEO asks whether customers need to be notified by end of day."
+                      : "Add a live development for TabletopForge to present, such as: The CEO asks whether customers need to be notified by end of day."
+                  }
                   className="min-h-[88px]"
                 />
                 <Button variant="secondary" onClick={addCustomInject} className="sm:self-start">
                   <Plus className="size-4" />
-                  Add Inject
+                  Add Live Inject
                 </Button>
               </div>
             </section>
@@ -196,7 +206,7 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg">
             <ClipboardList className="size-5 text-primary" />
-            Facilitator Notes
+            {hasHumanFacilitator ? "Facilitator Notes" : "Session Notes"}
           </CardTitle>
         </CardHeader>
         <CardContent className="grid gap-4 lg:grid-cols-2">
@@ -205,7 +215,11 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
             <Textarea
               value={sessionNotes}
               onChange={(event) => setSessionNotes(event.target.value)}
-              placeholder="Capture unclear answers, ownership questions, timeline issues, and communication gaps."
+              placeholder={
+                hasHumanFacilitator
+                  ? "Capture unclear answers, ownership questions, timeline issues, and communication gaps."
+                  : "Capture what the group says, unclear answers, ownership questions, and communication gaps."
+              }
               className="min-h-[180px]"
             />
           </div>
@@ -242,13 +256,16 @@ function PromptList({ title, items }: { title: string; items: string[] }) {
 function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
   const focusGaps = exercise.irpAnalysis?.findings.filter((finding) => finding.status !== "found").slice(0, 3) ?? [];
   const gapPrompts = focusGaps.map((finding) => `The IRP scan flagged ${finding.label.toLowerCase()}. How would the team handle that gap during this incident?`);
+  const hasHumanFacilitator = exercise.overview.hasHumanFacilitator;
 
   return [
     {
       label: "Step 1",
       title: "Kickoff And Ground Rules",
       duration: "5 min",
-      facilitatorScript: `Start by reminding the group that this is a no-fault discussion for ${exercise.overview.organization}. The goal is to test decision-making, ownership, and the IRP, not to prove technical expertise.`,
+      facilitatorScript: hasHumanFacilitator
+        ? `Start by reminding the group that this is a no-fault discussion for ${exercise.overview.organization}. The goal is to test decision-making, ownership, and the IRP, not to prove technical expertise.`
+        : `Welcome to the ${exercise.overview.organization} tabletop exercise. This is a no-fault discussion. Your goal is to talk through decisions, ownership, communications, and IRP gaps. Assign one person to read responses aloud and one person to capture notes before moving on.`,
       prompts: [
         "Who is participating today, and what role are they representing?",
         "Who will capture decisions, unclear answers, and action items?",
@@ -268,7 +285,9 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
       label: "Step 2",
       title: "Initial Report",
       duration: "10 min",
-      facilitatorScript: `Read the scenario aloud, then ask the group to describe the first 15 minutes of response. Keep pulling the conversation back to who owns each action and where it is written down.`,
+      facilitatorScript: hasHumanFacilitator
+        ? `Read the scenario aloud, then ask the group to describe the first 15 minutes of response. Keep pulling the conversation back to who owns each action and where it is written down.`
+        : `Read the scenario below as if it just happened. Discuss the first 15 minutes of response. Do not jump straight to technical fixes. Name who receives the report, who owns each action, and where the IRP supports that answer.`,
       prompts: [
         exercise.scenarioSummary,
         ...exercise.discussionQuestions.slice(0, 4),
@@ -285,7 +304,9 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
       label: "Step 3",
       title: "Escalation And Containment",
       duration: "15 min",
-      facilitatorScript: "Increase pressure slightly. Ask what the team can do immediately, what needs approval, and what business risk each containment choice creates.",
+      facilitatorScript: hasHumanFacilitator
+        ? "Increase pressure slightly. Ask what the team can do immediately, what needs approval, and what business risk each containment choice creates."
+        : "The situation is getting more serious. Before you reveal another development, decide what the team can do immediately, what requires approval, and what business risk each containment choice creates.",
       prompts: [
         ...exercise.discussionQuestions.slice(4, 8),
         ...exercise.gapDiscoveryQuestions.slice(0, 3),
@@ -302,7 +323,9 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
       label: "Step 4",
       title: "Communications And Impact",
       duration: "15 min",
-      facilitatorScript: "Shift to communication, leadership updates, legal/compliance involvement, and stakeholder expectations. Ask the group to avoid vague answers like 'we would notify people' and name the audience, owner, and message.",
+      facilitatorScript: hasHumanFacilitator
+        ? "Shift to communication, leadership updates, legal/compliance involvement, and stakeholder expectations. Ask the group to avoid vague answers like 'we would notify people' and name the audience, owner, and message."
+        : "Now focus on communications and impact. Avoid vague answers like 'we would notify people.' Name the audience, message owner, approval path, and what facts are confirmed before any update is sent.",
       prompts: [
         ...exercise.discussionQuestions.slice(8, 12),
         ...exercise.gapDiscoveryQuestions.slice(3, 7),
@@ -323,7 +346,9 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
       label: "Step 5",
       title: "Recovery And Lessons Learned",
       duration: "15 min",
-      facilitatorScript: "Close by turning gaps into improvements. Every unclear answer should become an action item with an owner, due date, and priority.",
+      facilitatorScript: hasHumanFacilitator
+        ? "Close by turning gaps into improvements. Every unclear answer should become an action item with an owner, due date, and priority."
+        : "Close the exercise by turning every unclear answer into an improvement item. Do not leave this section until each major gap has an owner, due date, and priority.",
       prompts: [
         ...exercise.gapDiscoveryQuestions.slice(7, 12),
         "What slowed the response in this discussion?",

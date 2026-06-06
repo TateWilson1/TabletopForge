@@ -49,6 +49,7 @@ export interface ExerciseOptions {
   includeTechnicalQuestions: boolean;
   includeComplianceQuestions: boolean;
   includeLessonsLearned: boolean;
+  hasHumanFacilitator: boolean;
   irpText?: string;
   irpFileName?: string;
 }
@@ -70,6 +71,7 @@ export interface GeneratedExercise {
     scenario: ScenarioType;
     duration: ExerciseDuration;
     maturityLevel: MaturityLevel;
+    hasHumanFacilitator: boolean;
     purpose: string;
   };
   scenarioSummary: string;

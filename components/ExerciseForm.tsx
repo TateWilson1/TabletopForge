@@ -35,6 +35,7 @@ const defaultOptions: ExerciseOptions = {
   includeTechnicalQuestions: false,
   includeComplianceQuestions: true,
   includeLessonsLearned: true,
+  hasHumanFacilitator: false,
   irpText: "",
   irpFileName: "",
 };
@@ -203,6 +204,17 @@ export function ExerciseForm() {
 
           <div className="space-y-4">
             <ToggleRow
+              id="facilitator"
+              label="A human facilitator will run this exercise"
+              description={
+                options.hasHumanFacilitator
+                  ? "TabletopForge will give the facilitator scripts, prompts, and injects to use with the group."
+                  : "TabletopForge will act as the facilitator and speak directly to participants during the session."
+              }
+              checked={options.hasHumanFacilitator}
+              onCheckedChange={(checked) => updateOption("hasHumanFacilitator", checked)}
+            />
+            <ToggleRow
               id="executive"
               label="Include executive questions"
               checked={options.includeExecutiveQuestions}
@@ -276,20 +288,25 @@ function SelectField<T extends string>({
 function ToggleRow({
   id,
   label,
+  description,
   checked,
   onCheckedChange,
 }: {
   id: string;
   label: string;
+  description?: string;
   checked: boolean;
   onCheckedChange: (checked: boolean) => void;
 }) {
   return (
-    <div className="flex items-center gap-3 rounded-md border border-border bg-background/55 p-3">
+    <div className="flex items-start gap-3 rounded-md border border-border bg-background/55 p-3">
       <Checkbox id={id} checked={checked} onCheckedChange={(value) => onCheckedChange(value === true)} />
-      <Label htmlFor={id} className="cursor-pointer">
-        {label}
-      </Label>
+      <div className="space-y-1">
+        <Label htmlFor={id} className="cursor-pointer">
+          {label}
+        </Label>
+        {description ? <p className="text-sm leading-6 text-muted-foreground">{description}</p> : null}
+      </div>
     </div>
   );
 }

@@ -12,7 +12,7 @@ Tagline: "Simple incident response tabletop exercises for real-world readiness."
 - Organization profile fields for industry, size, maturity level, duration, and optional question sets
 - Realistic scenario summaries, objectives, suggested participants, discussion questions, IRP gap-discovery questions, expected decisions, facilitator notes, and executive summaries
 - Local IRP upload or paste analysis that adjusts tabletop questions around likely plan gaps
-- Interactive facilitator mode with phased discussion, next/back controls, inject reveals, custom injects, notes, and action-item capture
+- Interactive session mode where TabletopForge can act as the facilitator or support a human facilitator with phased discussion, next/back controls, inject reveals, custom injects, notes, and action-item capture
 - Optional lessons-learned template with action item, owner, due date, and priority prompts
 - Copyable and downloadable Markdown reports
 - Browser-based saved exercises with LocalStorage
@@ -51,7 +51,7 @@ npm run build
 - A cybersecurity student wants a realistic IR planning artifact for a portfolio.
 - An IT manager wants to discover missing communication templates and unclear containment authority.
 - A security lead wants to upload an IRP excerpt and generate questions that target missing severity, communications, containment, evidence, or recovery procedures.
-- A facilitator wants to run the tabletop directly from the website and reveal injects as the scenario evolves.
+- A team without a facilitator wants TabletopForge to guide the discussion directly and reveal injects as the scenario evolves.
 
 ## Resume Bullet
 
