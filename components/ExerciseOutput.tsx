@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { Clipboard, Download, FileText, Save } from "lucide-react";
-import { FacilitatorSession } from "@/components/FacilitatorSession";
+import Link from "next/link";
+import { Clipboard, Download, FileText, Play, Save } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -90,22 +90,23 @@ export function ExerciseOutput({
               <Save className="size-4" />
               Save
             </Button>
+            <Button asChild>
+              <Link href={`/session/${exercise.id}`}>
+                <Play className="size-4" />
+                Start Session
+              </Link>
+            </Button>
           </div>
         </div>
         {copyNotice ? <p className="text-sm text-primary">{copyNotice}</p> : null}
       </CardHeader>
       <CardContent>
-        <Tabs defaultValue="facilitator">
+        <Tabs defaultValue="report">
           <TabsList className="flex h-auto flex-wrap justify-start">
-            <TabsTrigger value="facilitator">Facilitator</TabsTrigger>
             <TabsTrigger value="report">Report</TabsTrigger>
             <TabsTrigger value="questions">Questions</TabsTrigger>
             <TabsTrigger value="markdown">Markdown</TabsTrigger>
           </TabsList>
-
-          <TabsContent value="facilitator">
-            <FacilitatorSession exercise={exercise} />
-          </TabsContent>
 
           <TabsContent value="report" className="space-y-6">
             <Section title="Exercise Overview">

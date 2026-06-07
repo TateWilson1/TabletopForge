@@ -15,6 +15,10 @@ export function getSavedExercises(): GeneratedExercise[] {
   }
 }
 
+export function getSavedExerciseById(id: string): GeneratedExercise | undefined {
+  return getSavedExercises().find((exercise) => exercise.id === id);
+}
+
 export function saveExercise(exercise: GeneratedExercise) {
   const existing = getSavedExercises().filter((item) => item.id !== exercise.id);
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify([exercise, ...existing]));

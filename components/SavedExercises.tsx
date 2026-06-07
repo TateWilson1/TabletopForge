@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Eye, Trash2 } from "lucide-react";
+import Link from "next/link";
+import { Eye, Play, Trash2 } from "lucide-react";
 import { ExerciseOutput } from "@/components/ExerciseOutput";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -75,6 +76,12 @@ export function SavedExercises() {
                 <Button variant="secondary" onClick={() => setSelected(exercise)}>
                   <Eye className="size-4" />
                   View
+                </Button>
+                <Button asChild>
+                  <Link href={`/session/${exercise.id}`}>
+                    <Play className="size-4" />
+                    Start
+                  </Link>
                 </Button>
                 <Button variant="destructive" onClick={() => handleDelete(exercise.id)}>
                   <Trash2 className="size-4" />

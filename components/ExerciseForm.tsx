@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { FileText, Wand2, X } from "lucide-react";
 import { ExerciseOutput } from "@/components/ExerciseOutput";
 import { Badge } from "@/components/ui/badge";
@@ -41,6 +42,7 @@ const defaultOptions: ExerciseOptions = {
 };
 
 export function ExerciseForm() {
+  const router = useRouter();
   const [options, setOptions] = useState<ExerciseOptions>(defaultOptions);
   const [exercise, setExercise] = useState<GeneratedExercise | null>(null);
   const [error, setError] = useState("");
@@ -87,6 +89,7 @@ export function ExerciseForm() {
     setExercise(generated);
     saveExercise(generated);
     setSavedNotice("Exercise generated and saved in this browser.");
+    router.push(`/session/${generated.id}`);
   }
 
   return (
