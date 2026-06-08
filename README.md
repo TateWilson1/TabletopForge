@@ -1,23 +1,22 @@
 # TabletopForge
 
-![Screenshot placeholder](./public/screenshot-placeholder.svg)
+TabletopForge is an incident response tabletop exercise generator for small businesses, MSPs, IT teams, and cybersecurity students.
 
-TabletopForge is an incident response tabletop exercise generator for small businesses, MSPs, IT teams, and cybersecurity students. It creates practical, non-technical tabletop packages that expose gaps in an organization's Incident Response Plan without requiring complex injects or paid APIs.
+Tagline: Simple incident response tabletop exercises for real-world readiness.
 
-Tagline: "Simple incident response tabletop exercises for real-world readiness."
+## Overview
+
+The app creates practical tabletop packages that help organizations test incident response planning without paid APIs or complex inject design. It focuses on discussion quality, IRP gap discovery, and executive-ready documentation.
 
 ## Features
 
 - Scenario builder for phishing/BEC, ransomware, data exfiltration, compromised admin accounts, lost laptops, vendor breaches, insider threats, and cloud misconfiguration
 - Organization profile fields for industry, size, maturity level, duration, and optional question sets
-- Realistic scenario summaries, objectives, suggested participants, discussion questions, IRP gap-discovery questions, expected decisions, facilitator notes, and executive summaries
-- Local IRP upload or paste analysis that adjusts tabletop questions around likely plan gaps
-- Interactive session mode where TabletopForge can act as the facilitator or support a human facilitator with phased discussion, next/back controls, inject reveals, custom injects, notes, and action-item capture
-- Dedicated live session page at `/session/[id]` so the tabletop flow has more screen space than the generator/report view
-- Optional lessons-learned template with action item, owner, due date, and priority prompts
+- Scenario summaries, objectives, participants, discussion questions, IRP gap-discovery questions, expected decisions, facilitator notes, and executive summaries
+- Lessons-learned template with action item, owner, due date, and priority prompts
 - Copyable and downloadable Markdown reports
 - Browser-based saved exercises with LocalStorage
-- Responsive dark GRC dashboard interface built with shadcn/ui-style components
+- Responsive dark GRC dashboard interface
 
 ## Tech Stack
 
@@ -27,7 +26,6 @@ Tagline: "Simple incident response tabletop exercises for real-world readiness."
 - shadcn/ui-style components
 - App Router
 - LocalStorage
-- Local browser-only IRP text analysis
 
 ## Run Locally
 
@@ -45,30 +43,13 @@ npm run lint
 npm run build
 ```
 
-## Example Use Cases
+## Portfolio Case Study
 
-- A small business wants to test who receives and escalates a suspicious email report.
-- An MSP wants a simple ransomware tabletop for a client leadership team.
-- A cybersecurity student wants a realistic IR planning artifact for a portfolio.
-- An IT manager wants to discover missing communication templates and unclear containment authority.
-- A security lead wants to upload an IRP excerpt and generate questions that target missing severity, communications, containment, evidence, or recovery procedures.
-- A team without a facilitator wants TabletopForge to guide the discussion directly and reveal injects as the scenario evolves.
-- A facilitator wants to open a focused session page on a meeting-room screen while keeping the full report available separately.
+Read the case study on my portfolio: https://tatewilson1.github.io/case-tabletopforge.html
 
 ## Resume Bullet
 
-"Built TabletopForge, a full-stack incident response tabletop exercise generator that creates scenario-based discussion guides, IRP gap-discovery questions, executive summaries, and lessons-learned templates for cybersecurity readiness planning."
-
-## Future Improvements
-
-- PDF export
-- Custom scenario authoring
-- AI-assisted IRP interpretation and facilitator injects
-- Export facilitator notes and action items with the final report
-- Exercise scoring and maturity recommendations
-- Shared team workspaces
-- More compliance-specific report templates
-- Import/export saved exercise library
+Built TabletopForge, a full-stack incident response tabletop exercise generator that creates scenario-based discussion guides, IRP gap-discovery questions, executive summaries, and lessons-learned templates for cybersecurity readiness planning.
 
 ## Disclaimer
 
