@@ -6,6 +6,9 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "TabletopForge",
   description: "Simple incident response tabletop exercises for real-world readiness.",
+  other: {
+    "darkreader-lock": "",
+  },
 };
 
 const navItems = [
@@ -17,7 +20,7 @@ const navItems = [
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className="dark">
+    <html lang="en" className="dark" suppressHydrationWarning>
       <body>
         <div className="signal-grid min-h-screen">
           <header className="sticky top-0 z-40 border-b border-border/70 bg-background/82 backdrop-blur">

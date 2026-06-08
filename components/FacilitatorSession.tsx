@@ -322,10 +322,12 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
         "Who owns note taking?",
         "What is in scope for today's discussion?",
       ],
-      injects: [
+      injects: buildInjects(exercise, "kickoff", [
         "A senior leader joins late and asks for a simple explanation of what the exercise is trying to prove.",
         "One participant says they have never seen the incident response plan before today.",
-      ],
+        "A department lead asks whether the exercise should include vendors and outside service providers.",
+        "The note taker asks whether action items should be captured as risks, tasks, or both.",
+      ]),
     },
     {
       label: "Step 2",
@@ -350,11 +352,13 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
         "Which evidence, messages, logs, or records must be preserved immediately.",
       ],
       decisions: exercise.expectedDecisions.slice(0, 3),
-      injects: [
+      injects: buildInjects(exercise, "initial", [
         "A second employee reports a similar issue, suggesting this may not be isolated.",
         "The original reporter is unavailable for follow-up because they left for a meeting.",
         "Leadership asks whether this is officially an incident yet.",
-      ],
+        "The help desk receives a vague report from another team but does not have enough detail to classify it.",
+        "A manager asks whether normal business activity should continue while the team investigates.",
+      ]),
     },
     {
       label: "Step 3",
@@ -379,11 +383,13 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
         "Whether evidence preservation must happen before containment or recovery actions.",
       ],
       decisions: exercise.expectedDecisions.slice(2, 6),
-      injects: [
+      injects: buildInjects(exercise, "containment", [
         "A department manager says the proposed containment step will interrupt a critical business process.",
         "The team cannot immediately reach the person who normally approves high-impact IT actions.",
         "Someone asks whether evidence should be preserved before containment begins.",
-      ],
+        "The IT lead says they can act quickly, but the business owner wants a written approval first.",
+        "A responder finds partial evidence but is not sure whether it is enough to justify containment.",
+      ]),
     },
     {
       label: "Step 4",
@@ -412,11 +418,13 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
         "Whether legal, compliance, or cyber insurance should be involved.",
         "Whether employees, customers, vendors, or regulators need communication.",
       ],
-      injects: [
+      injects: buildInjects(exercise, "communications", [
         "An executive asks for a status update they can forward to leadership within 10 minutes.",
         "A customer-facing manager hears rumors and asks what they are allowed to say.",
         "Legal asks what facts are confirmed versus assumed.",
-      ],
+        "A department head wants to send their own message before the official update is ready.",
+        "A vendor asks whether they should prepare a statement for their support team.",
+      ]),
     },
     {
       label: "Step 5",
@@ -446,11 +454,189 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
         "Who owns each IRP update?",
         "When will the team validate that improvements were completed?",
       ],
-      injects: [
+      injects: buildInjects(exercise, "recovery", [
         "The facilitator asks each participant to name one thing they would change in the IRP.",
         "Leadership wants the top three improvement items by tomorrow morning.",
         "A participant says the team should rerun this exercise after updates are complete.",
-      ],
+        "The team realizes one action item depends on another department that was not represented.",
+        "Someone asks how leadership will know whether the fixes actually worked.",
+      ]),
     },
   ];
+}
+
+type InjectStage = "kickoff" | "initial" | "containment" | "communications" | "recovery";
+
+const scenarioInjects: Record<GeneratedExercise["overview"]["scenario"], Partial<Record<InjectStage, string[]>>> = {
+  "Phishing / Business Email Compromise": {
+    initial: [
+      "Finance reports that a payment request in the suspicious email resembles a real vendor conversation.",
+      "A user says they approved an MFA prompt shortly after entering credentials.",
+      "The security tool flags a new mailbox forwarding rule on the affected account.",
+      "An executive assistant asks whether the senior executive's account was impersonated or compromised.",
+    ],
+    containment: [
+      "The affected user is in the middle of approving time-sensitive invoices.",
+      "IT can revoke sessions, but doing so may interrupt access for a traveling executive.",
+      "A mailbox audit search finds suspicious inbox rules but the team has not preserved the original email yet.",
+    ],
+    communications: [
+      "Finance asks whether all payment approvers should be warned before the investigation is complete.",
+      "An executive wants a short statement explaining whether any money left the organization.",
+      "Employees are forwarding screenshots of the phishing email in a group chat.",
+    ],
+  },
+  Ransomware: {
+    initial: [
+      "A second team reports renamed files on a different shared drive.",
+      "The help desk receives a screenshot of a ransom note from another workstation.",
+      "A user says their computer became slow shortly before files stopped opening.",
+    ],
+    containment: [
+      "Disconnecting the shared drive would pause a critical business workflow.",
+      "The backup owner says the latest backup status has not been verified today.",
+      "A responder wants to rebuild a workstation, but evidence has not been captured.",
+    ],
+    communications: [
+      "Operations asks what to tell employees who cannot access shared files.",
+      "Leadership asks whether customers will notice an outage today.",
+      "Legal asks whether law enforcement or cyber insurance should be contacted before recovery starts.",
+    ],
+  },
+  "Data Exfiltration": {
+    initial: [
+      "A monitoring alert shows unusual outbound traffic from a file server.",
+      "A manager reports that a sensitive folder was accessed outside normal hours.",
+      "The team sees a large archive file created shortly before the alert.",
+    ],
+    containment: [
+      "Blocking outbound traffic could interrupt a legitimate partner data transfer.",
+      "The suspected system owner is unavailable to confirm whether the transfer was authorized.",
+      "The team needs to decide whether to preserve network logs before changing firewall rules.",
+    ],
+    communications: [
+      "Legal asks whether the data involved could trigger notification obligations.",
+      "A business owner asks whether the affected customer list can be named yet.",
+      "An executive wants to know whether this should be treated as a confirmed breach.",
+    ],
+  },
+  "Compromised Admin Account": {
+    initial: [
+      "An admin account signs in from an unfamiliar location shortly after hours.",
+      "A privileged configuration change appears in the audit log with no matching change ticket.",
+      "The admin user says they did not perform the action shown in the alert.",
+    ],
+    containment: [
+      "Disabling the admin account may block urgent operational support.",
+      "The team finds active sessions but is not sure which systems trust the account.",
+      "Another administrator can help, but their access has not been recently reviewed.",
+    ],
+    communications: [
+      "Leadership asks whether administrative access to critical systems is still trustworthy.",
+      "Compliance asks whether privileged access review records are current.",
+      "A system owner wants to know whether they should pause planned maintenance.",
+    ],
+  },
+  "Lost or Stolen Laptop": {
+    initial: [
+      "The employee cannot remember whether the laptop was locked when it went missing.",
+      "The asset record is missing the latest encryption status.",
+      "The employee says client files may have been saved locally for travel.",
+    ],
+    containment: [
+      "Remote wipe is available, but the device has not checked in recently.",
+      "The team needs to decide whether to disable the user's sessions before confirming theft.",
+      "The user's manager says the employee needs immediate access to continue work.",
+    ],
+    communications: [
+      "Legal asks whether the laptop contained regulated or customer data.",
+      "HR asks what the employee should document about the loss.",
+      "A customer manager asks whether client-facing teams need a prepared answer.",
+    ],
+  },
+  "Vendor / Third-Party Breach": {
+    initial: [
+      "A vendor sends a vague notice saying they are investigating unauthorized access.",
+      "A business owner says the vendor supports a critical workflow but does not know what data they store.",
+      "The vendor portal becomes unavailable shortly after the notice.",
+    ],
+    containment: [
+      "Suspending the vendor connection may interrupt customer service.",
+      "The contract owner cannot immediately find the breach notification clause.",
+      "IT can rotate shared credentials, but the vendor has not confirmed whether credentials were exposed.",
+    ],
+    communications: [
+      "Leadership asks whether the vendor breach affects your organization directly.",
+      "Legal asks for the contract, data processing terms, and notification timeline.",
+      "A customer-facing team asks whether they can mention the vendor by name.",
+    ],
+  },
+  "Insider Threat": {
+    initial: [
+      "A manager reports unusual access by an employee who recently gave notice.",
+      "Audit logs show bulk downloads from folders outside the employee's normal role.",
+      "HR says there is an active employee relations issue involving the user.",
+    ],
+    containment: [
+      "Disabling access could tip off the employee before HR and legal are ready.",
+      "The team needs to preserve logs without spreading sensitive allegations.",
+      "The user's manager asks whether they should confront the employee directly.",
+    ],
+    communications: [
+      "HR asks who can know about the investigation.",
+      "Legal asks whether evidence handling has been documented clearly.",
+      "Leadership wants to understand business impact without exposing personnel details.",
+    ],
+  },
+  "Cloud Misconfiguration": {
+    initial: [
+      "A researcher reports that a cloud storage location may be publicly accessible.",
+      "A developer says the setting may have been changed during a recent deployment.",
+      "A scanner flags exposed data but does not clearly identify whether anyone accessed it.",
+    ],
+    containment: [
+      "Locking down the cloud resource could break an integration used by customers.",
+      "The team needs to decide whether to snapshot logs before changing permissions.",
+      "The resource owner is not sure which application depends on the exposed storage.",
+    ],
+    communications: [
+      "Leadership asks whether the exposure is confirmed or only suspected.",
+      "A product owner wants to notify customers quickly, but legal asks for more facts first.",
+      "Compliance asks whether access logs are retained long enough to assess exposure.",
+    ],
+  },
+};
+
+function buildInjects(exercise: GeneratedExercise, stage: InjectStage, commonInjects: string[], count = 3) {
+  const scenarioSpecific = scenarioInjects[exercise.overview.scenario][stage] ?? [];
+  const pool = [...scenarioSpecific, ...commonInjects];
+  return seededShuffle(pool, `${exercise.id}:${stage}:${exercise.overview.scenario}`).slice(0, count);
+}
+
+function seededShuffle(items: string[], seedText: string) {
+  const shuffled = [...items];
+  let seed = hashSeed(seedText);
+
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    seed = nextSeed(seed);
+    const swapIndex = seed % (index + 1);
+    [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
+  }
+
+  return shuffled;
+}
+
+function hashSeed(value: string) {
+  let hash = 2166136261;
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+
+  return hash >>> 0;
+}
+
+function nextSeed(seed: number) {
+  return (Math.imul(seed, 1664525) + 1013904223) >>> 0;
 }
