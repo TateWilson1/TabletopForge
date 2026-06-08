@@ -23,6 +23,8 @@ interface FacilitatorStep {
   duration: string;
   facilitatorScript: string;
   scenarioBrief?: string;
+  knownFacts: string[];
+  unknowns: string[];
   prompts: string[];
   decisions: string[];
   injects: string[];
@@ -142,10 +144,9 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
               </section>
             ) : null}
 
-            <div className="grid gap-4 lg:grid-cols-2">
-              <PromptList title={hasHumanFacilitator ? "Ask The Room" : "Discuss This Now"} items={activeStep.prompts} />
-              <PromptList title={hasHumanFacilitator ? "Decisions To Capture" : "Decide Before Moving On"} items={activeStep.decisions} />
-            </div>
+            <TriageBoard knownFacts={activeStep.knownFacts} unknowns={activeStep.unknowns} decisions={activeStep.decisions} />
+
+            <PromptList title={hasHumanFacilitator ? "Ask The Room" : "Discuss This Now"} items={activeStep.prompts} />
 
             <Separator />
 
@@ -263,6 +264,31 @@ function PromptList({ title, items }: { title: string; items: string[] }) {
   );
 }
 
+function TriageBoard({ knownFacts, unknowns, decisions }: { knownFacts: string[]; unknowns: string[]; decisions: string[] }) {
+  return (
+    <section className="grid gap-4 xl:grid-cols-3">
+      <BoardList title="Facts Known" items={knownFacts} />
+      <BoardList title="Unknowns" items={unknowns} />
+      <BoardList title="Decisions Needed" items={decisions} />
+    </section>
+  );
+}
+
+function BoardList({ title, items }: { title: string; items: string[] }) {
+  return (
+    <div className="rounded-md border border-border bg-background/45 p-4">
+      <h3 className="mb-3 text-sm font-semibold text-foreground">{title}</h3>
+      <ul className="space-y-2">
+        {items.map((item) => (
+          <li key={item} className="text-sm leading-6 text-muted-foreground">
+            {item}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
   const focusGaps = exercise.irpAnalysis?.findings.filter((finding) => finding.status !== "found").slice(0, 3) ?? [];
   const gapPrompts = focusGaps.map((finding) => `The IRP scan flagged ${finding.label.toLowerCase()}. How would the team handle that gap during this incident?`);
@@ -280,6 +306,16 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
         "Who is participating today, and what role are they representing?",
         "Who will capture decisions, unclear answers, and action items?",
         ...exercise.objectives.slice(0, 2),
+      ],
+      knownFacts: [
+        `${exercise.overview.organization} is running a ${exercise.overview.duration} tabletop exercise.`,
+        `The selected scenario is ${exercise.overview.scenario}.`,
+        `The goal is to test the IRP and decision-making at a ${exercise.overview.maturityLevel.toLowerCase()} maturity level.`,
+      ],
+      unknowns: [
+        "Whether every required business, technical, and leadership role is represented.",
+        "Who will capture decisions, action items, and unclear answers.",
+        "Which systems, teams, or business processes are out of scope today.",
       ],
       decisions: [
         "Who is the facilitator?",
@@ -303,6 +339,16 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
         ...exercise.discussionQuestions.slice(0, 4),
         ...gapPrompts.slice(0, 1),
       ],
+      knownFacts: [
+        "An initial report has been received and needs triage.",
+        "The team has not yet confirmed full scope, severity, or business impact.",
+        "Early decisions should be documented before the team moves into containment.",
+      ],
+      unknowns: [
+        "How many users, systems, vendors, or business processes may be affected.",
+        "Whether the IRP threshold for declaring a formal incident has been met.",
+        "Which evidence, messages, logs, or records must be preserved immediately.",
+      ],
       decisions: exercise.expectedDecisions.slice(0, 3),
       injects: [
         "A second employee reports a similar issue, suggesting this may not be isolated.",
@@ -322,6 +368,16 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
         ...exercise.gapDiscoveryQuestions.slice(0, 3),
         ...gapPrompts.slice(1, 2),
       ],
+      knownFacts: [
+        "The incident is serious enough to consider containment actions.",
+        "Some containment choices may interrupt normal business operations.",
+        "Approval authority matters if the response could affect customers, revenue, or critical services.",
+      ],
+      unknowns: [
+        "Which accounts, devices, applications, or data stores are currently exposed.",
+        "Who can approve high-impact containment if the usual approver is unavailable.",
+        "Whether evidence preservation must happen before containment or recovery actions.",
+      ],
       decisions: exercise.expectedDecisions.slice(2, 6),
       injects: [
         "A department manager says the proposed containment step will interrupt a critical business process.",
@@ -340,6 +396,16 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
         ...exercise.discussionQuestions.slice(8, 12),
         ...exercise.gapDiscoveryQuestions.slice(3, 7),
         ...gapPrompts.slice(2, 3),
+      ],
+      knownFacts: [
+        "Leadership and business stakeholders may need a status update.",
+        "Some facts are confirmed, while others are still assumptions.",
+        "External communication may create legal, regulatory, customer, or vendor impact.",
+      ],
+      unknowns: [
+        "Who needs to be briefed now versus later.",
+        "What the team can say confidently without overpromising or speculating.",
+        "Whether legal, compliance, cyber insurance, or outside response partners should be engaged.",
       ],
       decisions: [
         "Whether leadership needs an immediate briefing.",
@@ -364,6 +430,16 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
         "What slowed the response in this discussion?",
         "What would need to be updated in the IRP before this scenario happened for real?",
         "What training or tabletop should happen next?",
+      ],
+      knownFacts: [
+        "The exercise has surfaced decisions, unclear answers, and potential IRP gaps.",
+        "Every unresolved issue should become an action item or an accepted risk.",
+        "The team needs a way to verify improvements after the exercise.",
+      ],
+      unknowns: [
+        "Which improvement items matter most for reducing real incident risk.",
+        "Who owns each update after the tabletop ends.",
+        "When the team will retest the improved process.",
       ],
       decisions: [
         "Which action items are high priority?",
