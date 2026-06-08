@@ -22,6 +22,7 @@ interface FacilitatorStep {
   label: string;
   duration: string;
   facilitatorScript: string;
+  scenarioBrief?: string;
   prompts: string[];
   decisions: string[];
   injects: string[];
@@ -131,6 +132,15 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
               </div>
               <p className="leading-7 text-muted-foreground">{activeStep.facilitatorScript}</p>
             </section>
+
+            {activeStep.scenarioBrief ? (
+              <section className="rounded-md border border-border bg-background/55 p-4">
+                <div className="mb-2 text-sm font-medium text-foreground">
+                  {hasHumanFacilitator ? "Read Aloud Scenario" : "Current Situation"}
+                </div>
+                <p className="leading-7 text-muted-foreground">{activeStep.scenarioBrief}</p>
+              </section>
+            ) : null}
 
             <div className="grid gap-4 lg:grid-cols-2">
               <PromptList title={hasHumanFacilitator ? "Ask The Room" : "Discuss This Now"} items={activeStep.prompts} />
@@ -288,8 +298,8 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
       facilitatorScript: hasHumanFacilitator
         ? `Read the scenario aloud, then ask the group to describe the first 15 minutes of response. Keep pulling the conversation back to who owns each action and where it is written down.`
         : `Read the scenario below as if it just happened. Discuss the first 15 minutes of response. Do not jump straight to technical fixes. Name who receives the report, who owns each action, and where the IRP supports that answer.`,
+      scenarioBrief: exercise.scenarioSummary,
       prompts: [
-        exercise.scenarioSummary,
         ...exercise.discussionQuestions.slice(0, 4),
         ...gapPrompts.slice(0, 1),
       ],
