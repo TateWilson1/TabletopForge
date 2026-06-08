@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import {
+  Award,
   ChevronLeft,
   ChevronRight,
   Clipboard,
@@ -20,7 +21,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
-import type { GeneratedExercise } from "@/lib/types";
+import { saveCompletedSession } from "@/lib/storage";
+import type { CompletedSession, CompletedSessionDecision, GeneratedExercise, SessionScoreCategory } from "@/lib/types";
 
 interface Inject {
   id: string;
@@ -57,6 +59,7 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
   const [sessionNotes, setSessionNotes] = useState("");
   const [actionItems, setActionItems] = useState("");
   const [exportNotice, setExportNotice] = useState("");
+  const [completedSession, setCompletedSession] = useState<CompletedSession | null>(null);
   const [timerRunning, setTimerRunning] = useState(true);
   const [remainingSeconds, setRemainingSeconds] = useState(() => durationToSeconds(steps[0]?.duration ?? "5 min"));
 
@@ -125,6 +128,7 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
     setSessionNotes("");
     setActionItems("");
     setExportNotice("");
+    setCompletedSession(null);
     setRemainingSeconds(durationToSeconds(steps[0]?.duration ?? "5 min"));
     setTimerRunning(true);
   }
@@ -134,12 +138,12 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
   }
 
   async function copySessionSummary() {
-    await navigator.clipboard.writeText(buildSessionSummary(exercise, revealedInjects, steps, decisionStatuses, sessionNotes, actionItems));
-    setExportNotice("Session summary copied.");
+    await navigator.clipboard.writeText(completedSession?.markdownReport ?? buildSessionSummary(exercise, revealedInjects, steps, decisionStatuses, sessionNotes, actionItems));
+    setExportNotice(completedSession ? "Scorecard summary copied." : "Session summary copied.");
   }
 
   function downloadSessionSummary() {
-    const blob = new Blob([buildSessionSummary(exercise, revealedInjects, steps, decisionStatuses, sessionNotes, actionItems)], {
+    const blob = new Blob([completedSession?.markdownReport ?? buildSessionSummary(exercise, revealedInjects, steps, decisionStatuses, sessionNotes, actionItems)], {
       type: "text/markdown;charset=utf-8",
     });
     const url = URL.createObjectURL(blob);
@@ -148,7 +152,15 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
     link.download = `${exercise.overview.organization.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}-session-summary.md`;
     link.click();
     URL.revokeObjectURL(url);
-    setExportNotice("Session summary downloaded.");
+    setExportNotice(completedSession ? "Scorecard summary downloaded." : "Session summary downloaded.");
+  }
+
+  function endExercise() {
+    const scorecard = buildCompletedSession(exercise, revealedInjects, steps, decisionStatuses, sessionNotes, actionItems);
+    saveCompletedSession(scorecard);
+    setCompletedSession(scorecard);
+    setExportNotice("Exercise ended. Scorecard saved in this browser.");
+    setTimerRunning(false);
   }
 
   return (
@@ -309,14 +321,23 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
                 <ChevronLeft className="size-4" suppressHydrationWarning />
                 Back
               </Button>
-              <Button onClick={() => moveStep(1)} disabled={activeIndex === steps.length - 1}>
-                Next
-                <ChevronRight className="size-4" suppressHydrationWarning />
-              </Button>
+              {activeIndex === steps.length - 1 ? (
+                <Button onClick={endExercise}>
+                  <Award className="size-4" suppressHydrationWarning />
+                  End Exercise
+                </Button>
+              ) : (
+                <Button onClick={() => moveStep(1)}>
+                  Next
+                  <ChevronRight className="size-4" suppressHydrationWarning />
+                </Button>
+              )}
             </div>
           </CardContent>
         </Card>
       </div>
+
+      {completedSession ? <Scorecard session={completedSession} /> : null}
 
       <Card className="bg-background/45">
         <CardHeader>
@@ -461,6 +482,64 @@ function DecisionList({
         })}
       </ul>
     </div>
+  );
+}
+
+function Scorecard({ session }: { session: CompletedSession }) {
+  const irpCoverage = session.categoryScores.find((category) => category.id === "irpCoverage");
+
+  return (
+    <Card className="border-primary/30 bg-card/90">
+      <CardHeader>
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <CardTitle className="flex items-center gap-2 text-xl">
+              <Award className="size-5 text-primary" suppressHydrationWarning />
+              Exercise Scorecard
+            </CardTitle>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">
+              Saved in this browser as a completed session. IRP coverage is scored only when an IRP was uploaded or pasted.
+            </p>
+          </div>
+          <div className="rounded-md border border-primary/35 bg-primary/10 px-4 py-3 text-center">
+            <p className="text-xs uppercase text-muted-foreground">Overall Readiness</p>
+            <p className="text-3xl font-semibold text-primary">{session.overallScore}/100</p>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {session.categoryScores.map((category) => (
+            <div key={category.id} className="rounded-md border border-border bg-background/45 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="text-sm font-semibold">{category.label}</h3>
+                <Badge variant={category.score === null ? "outline" : category.score >= 75 ? "secondary" : "outline"}>
+                  {category.score === null ? "N/A" : `${category.score}/100`}
+                </Badge>
+              </div>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">{category.summary}</p>
+            </div>
+          ))}
+        </div>
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          <BoardList title="Strengths" items={session.strengths} />
+          <BoardList title="Gaps To Improve" items={session.gaps} />
+        </div>
+
+        <BoardList title="Unresolved Unknowns" items={session.unresolvedUnknowns} />
+
+        <div className="rounded-md border border-accent/35 bg-accent/10 p-4">
+          <h3 className="text-sm font-semibold text-accent">Recommended Next Tabletop</h3>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">{session.recommendedNextTabletop}</p>
+          {irpCoverage?.score === null ? (
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">
+              Uploading an IRP next time will add plan coverage scoring and more specific remediation guidance.
+            </p>
+          ) : null}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -896,6 +975,286 @@ function buildSessionSummary(
   lines.push("### Action Items");
   lines.push(actionItems.trim() || "No action items captured.");
   lines.push("");
+
+  return lines.join("\n");
+}
+
+function buildCompletedSession(
+  exercise: GeneratedExercise,
+  revealedInjects: RevealedInject[],
+  steps: FacilitatorStep[],
+  decisionStatuses: Record<string, boolean>,
+  sessionNotes: string,
+  actionItems: string,
+): CompletedSession {
+  const decisions = steps.flatMap((step) =>
+    step.decisions.map((decision) => ({
+      stepTitle: step.title,
+      decision,
+      decided: decisionStatuses[decisionKey(step.title, decision)] === true,
+    })),
+  );
+  const completedInjects = revealedInjects.map((inject) => ({ stepTitle: inject.stepTitle, text: inject.text }));
+  const unresolvedUnknowns = buildUnresolvedUnknowns(steps, revealedInjects, decisionStatuses);
+  const categoryScores = buildCategoryScores(exercise, steps, decisions, revealedInjects, sessionNotes, actionItems);
+  const scoredCategories = categoryScores.filter((category) => category.score !== null);
+  const overallScore = Math.round(scoredCategories.reduce((total, category) => total + (category.score ?? 0), 0) / Math.max(1, scoredCategories.length));
+  const strengths = buildStrengths(categoryScores, decisions, revealedInjects, actionItems);
+  const gaps = buildGaps(categoryScores, unresolvedUnknowns, decisions, actionItems);
+  const recommendedNextTabletop = buildRecommendedNextTabletop(exercise, categoryScores);
+  const aiContext = {
+    schemaVersion: "tabletopforge.session.v1" as const,
+    exerciseId: exercise.id,
+    organization: exercise.overview.organization,
+    scenario: exercise.overview.scenario,
+    maturityLevel: exercise.overview.maturityLevel,
+    hasIrpAnalysis: Boolean(exercise.irpAnalysis),
+    irpFindings:
+      exercise.irpAnalysis?.findings.map((finding) => ({
+        id: finding.id,
+        label: finding.label,
+        status: finding.status,
+        summary: finding.summary,
+      })) ?? [],
+    decisions,
+    revealedInjects: completedInjects,
+    unresolvedUnknowns,
+    sessionNotes,
+    actionItems,
+  };
+  const completedAt = new Date().toISOString();
+  const session: CompletedSession = {
+    id: crypto.randomUUID(),
+    exerciseId: exercise.id,
+    completedAt,
+    organization: exercise.overview.organization,
+    scenario: exercise.overview.scenario,
+    overallScore,
+    categoryScores,
+    strengths,
+    gaps,
+    unresolvedUnknowns,
+    recommendedNextTabletop,
+    decisions,
+    revealedInjects: completedInjects,
+    sessionNotes,
+    actionItems,
+    aiContext,
+    markdownReport: "",
+  };
+
+  return {
+    ...session,
+    markdownReport: buildCompletedSessionMarkdown(exercise, session),
+  };
+}
+
+function buildCategoryScores(
+  exercise: GeneratedExercise,
+  steps: FacilitatorStep[],
+  decisions: CompletedSessionDecision[],
+  revealedInjects: RevealedInject[],
+  sessionNotes: string,
+  actionItems: string,
+): SessionScoreCategory[] {
+  return [
+    scoreDecisionCategory("escalation", "Escalation", decisions, ["Kickoff And Ground Rules", "Initial Report"], 8, "roles, triage, and incident declaration"),
+    scoreDecisionCategory("containment", "Containment", decisions, ["Escalation And Containment"], 6, "containment authority and business impact"),
+    scoreDecisionCategory("communications", "Communications", decisions, ["Communications And Impact"], 6, "leadership, legal, and stakeholder updates"),
+    scoreEvidenceHandling(exercise, decisions, revealedInjects),
+    scoreRecovery(decisions, actionItems, sessionNotes),
+    scoreIrpCoverage(exercise),
+  ];
+}
+
+function scoreDecisionCategory(
+  id: SessionScoreCategory["id"],
+  label: string,
+  decisions: CompletedSessionDecision[],
+  stepTitles: string[],
+  bonus: number,
+  focus: string,
+): SessionScoreCategory {
+  const relevant = decisions.filter((decision) => stepTitles.includes(decision.stepTitle));
+  const score = boundedScore(Math.round(decisionRatio(relevant) * 84 + bonus));
+  return {
+    id,
+    label,
+    score,
+    summary: `${score >= 75 ? "Strong" : score >= 50 ? "Partial" : "Weak"} coverage of ${focus}; ${relevant.filter((decision) => decision.decided).length} of ${relevant.length} decisions were marked decided.`,
+  };
+}
+
+function scoreEvidenceHandling(exercise: GeneratedExercise, decisions: CompletedSessionDecision[], revealedInjects: RevealedInject[]): SessionScoreCategory {
+  const evidenceSignals = decisions.filter((decision) => /evidence|preserv|log|record|audit|mailbox/i.test(decision.decision));
+  const scenarioEvidenceBoost = /Data Exfiltration|Compromised Admin Account|Cloud Misconfiguration|Phishing|Ransomware/.test(exercise.overview.scenario) ? 8 : 4;
+  const injectEvidenceBoost = revealedInjects.some((inject) => /evidence|log|audit|mailbox|backup|snapshot/i.test(inject.text)) ? 8 : 0;
+  const score = boundedScore(Math.round(decisionRatio(evidenceSignals.length ? evidenceSignals : decisions.slice(0, 3)) * 76 + scenarioEvidenceBoost + injectEvidenceBoost));
+  return {
+    id: "evidence",
+    label: "Evidence Handling",
+    score,
+    summary: `${score >= 75 ? "Good" : score >= 50 ? "Developing" : "Limited"} attention to evidence, logs, audit data, and preservation needs.`,
+  };
+}
+
+function scoreRecovery(decisions: CompletedSessionDecision[], actionItems: string, sessionNotes: string): SessionScoreCategory {
+  const recoveryDecisions = decisions.filter((decision) => decision.stepTitle === "Recovery And Lessons Learned");
+  const actionItemBoost = actionItems.trim().length > 0 ? 18 : 0;
+  const notesBoost = sessionNotes.trim().length > 0 ? 8 : 0;
+  const score = boundedScore(Math.round(decisionRatio(recoveryDecisions) * 68 + actionItemBoost + notesBoost));
+  return {
+    id: "recovery",
+    label: "Recovery / Lessons Learned",
+    score,
+    summary: `${score >= 75 ? "Actionable" : score >= 50 ? "Partially actionable" : "Thin"} closeout based on decisions, notes, and captured action items.`,
+  };
+}
+
+function scoreIrpCoverage(exercise: GeneratedExercise): SessionScoreCategory {
+  if (!exercise.irpAnalysis) {
+    return {
+      id: "irpCoverage",
+      label: "IRP Coverage",
+      score: null,
+      summary: "Not assessed because no IRP was uploaded or pasted.",
+    };
+  }
+
+  const findingScore = exercise.irpAnalysis.findings.reduce((total, finding) => {
+    if (finding.status === "found") {
+      return total + 100;
+    }
+    if (finding.status === "weak") {
+      return total + 60;
+    }
+    return total + 25;
+  }, 0);
+  const score = boundedScore(Math.round(findingScore / Math.max(1, exercise.irpAnalysis.findings.length)));
+
+  return {
+    id: "irpCoverage",
+    label: "IRP Coverage",
+    score,
+    summary: `${score >= 75 ? "Most core plan areas were visible" : score >= 50 ? "Several plan areas were weak" : "Major plan coverage gaps were likely"} in the uploaded IRP scan.`,
+  };
+}
+
+function buildUnresolvedUnknowns(steps: FacilitatorStep[], revealedInjects: RevealedInject[], decisionStatuses: Record<string, boolean>) {
+  const unresolved = steps.flatMap((step) => {
+    const hasOpenDecision = step.decisions.some((decision) => decisionStatuses[decisionKey(step.title, decision)] !== true);
+    return hasOpenDecision ? step.unknowns : [];
+  });
+
+  return uniqueStrings([...unresolved, ...revealedInjects.map((inject) => inject.unknown)]).slice(0, 10);
+}
+
+function buildStrengths(categoryScores: SessionScoreCategory[], decisions: CompletedSessionDecision[], revealedInjects: RevealedInject[], actionItems: string) {
+  const strengths = categoryScores
+    .filter((category) => (category.score ?? 0) >= 75)
+    .map((category) => `${category.label} scored ${category.score}/100.`);
+
+  if (decisions.some((decision) => decision.decided)) {
+    strengths.push(`${decisions.filter((decision) => decision.decided).length} decisions were explicitly marked decided.`);
+  }
+
+  if (revealedInjects.length > 0) {
+    strengths.push(`${revealedInjects.length} scenario injects were handled during the exercise.`);
+  }
+
+  if (actionItems.trim()) {
+    strengths.push("Action items were captured before closeout.");
+  }
+
+  return strengths.length ? strengths.slice(0, 6) : ["The team completed the facilitated session and produced a baseline for improvement."];
+}
+
+function buildGaps(categoryScores: SessionScoreCategory[], unresolvedUnknowns: string[], decisions: CompletedSessionDecision[], actionItems: string) {
+  const gaps = categoryScores
+    .filter((category) => category.score !== null && category.score < 70)
+    .map((category) => `${category.label}: ${category.summary}`);
+
+  if (unresolvedUnknowns.length > 0) {
+    gaps.push(`${unresolvedUnknowns.length} unresolved unknowns remained at closeout.`);
+  }
+
+  if (decisions.some((decision) => !decision.decided)) {
+    gaps.push(`${decisions.filter((decision) => !decision.decided).length} decisions were still unresolved.`);
+  }
+
+  if (!actionItems.trim()) {
+    gaps.push("No action items were captured.");
+  }
+
+  return gaps.length ? gaps.slice(0, 8) : ["No major gaps were flagged by the current scoring rules."];
+}
+
+function buildRecommendedNextTabletop(exercise: GeneratedExercise, categoryScores: SessionScoreCategory[]) {
+  const weakest = categoryScores
+    .filter((category) => category.score !== null)
+    .sort((first, second) => (first.score ?? 0) - (second.score ?? 0))[0];
+
+  if (!weakest) {
+    return `Run a follow-up ${exercise.overview.scenario.toLowerCase()} exercise with an uploaded IRP so plan coverage can be scored.`;
+  }
+
+  const recommendations: Record<SessionScoreCategory["id"], string> = {
+    escalation: "Run a short escalation drill focused on incident declaration, owner handoff, and leadership notification thresholds.",
+    containment: "Run a containment decision drill that forces the team to balance evidence preservation, business disruption, and approval authority.",
+    communications: "Run a communications tabletop focused on leadership updates, legal review, customer messaging, and confirmed-versus-assumed facts.",
+    evidence: "Run an evidence handling drill focused on log preservation, audit trails, screenshots, chain of custody, and timing before recovery.",
+    recovery: "Run a recovery and after-action tabletop focused on action owners, due dates, validation, and retesting improvements.",
+    irpCoverage: "Upload the latest IRP and run the same scenario again to validate whether the plan covers the weak areas.",
+  };
+
+  return recommendations[weakest.id];
+}
+
+function decisionRatio(decisions: CompletedSessionDecision[]) {
+  if (decisions.length === 0) {
+    return 0;
+  }
+
+  return decisions.filter((decision) => decision.decided).length / decisions.length;
+}
+
+function boundedScore(score: number) {
+  return Math.max(0, Math.min(100, score));
+}
+
+function uniqueStrings(items: string[]) {
+  return Array.from(new Set(items.filter(Boolean)));
+}
+
+function buildCompletedSessionMarkdown(exercise: GeneratedExercise, session: CompletedSession) {
+  const lines = [
+    buildSessionSummary(exercise, session.revealedInjects.map((inject) => ({ ...inject, id: inject.text, fact: inject.text, unknown: "", stepTitle: inject.stepTitle })), buildFacilitatorSteps(exercise), Object.fromEntries(session.decisions.map((decision) => [decisionKey(decision.stepTitle, decision.decision), decision.decided])), session.sessionNotes, session.actionItems),
+    "",
+    "## Exercise Scorecard",
+    `- Completed: ${session.completedAt}`,
+    `- Overall readiness: ${session.overallScore}/100`,
+    "",
+    "### Category Scores",
+    ...session.categoryScores.map((category) => `- ${category.label}: ${category.score === null ? "N/A" : `${category.score}/100`} - ${category.summary}`),
+    "",
+    "### Strengths",
+    ...session.strengths.map((strength) => `- ${strength}`),
+    "",
+    "### Gaps",
+    ...session.gaps.map((gap) => `- ${gap}`),
+    "",
+    "### Unresolved Unknowns",
+    ...session.unresolvedUnknowns.map((unknown) => `- ${unknown}`),
+    "",
+    "### Recommended Next Tabletop",
+    session.recommendedNextTabletop,
+    "",
+    "### AI Context",
+    "```json",
+    JSON.stringify(session.aiContext, null, 2),
+    "```",
+    "",
+  ];
 
   return lines.join("\n");
 }

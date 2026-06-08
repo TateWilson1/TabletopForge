@@ -105,3 +105,61 @@ export interface IrpAnalysis {
   strengths: string[];
   findings: IrpGapFinding[];
 }
+
+export interface SessionScoreCategory {
+  id: "escalation" | "containment" | "communications" | "evidence" | "recovery" | "irpCoverage";
+  label: string;
+  score: number | null;
+  summary: string;
+}
+
+export interface CompletedSessionDecision {
+  stepTitle: string;
+  decision: string;
+  decided: boolean;
+}
+
+export interface CompletedSessionInject {
+  stepTitle: string;
+  text: string;
+}
+
+export interface AiSessionContext {
+  schemaVersion: "tabletopforge.session.v1";
+  exerciseId: string;
+  organization: string;
+  scenario: ScenarioType;
+  maturityLevel: MaturityLevel;
+  hasIrpAnalysis: boolean;
+  irpFindings: Array<{
+    id: string;
+    label: string;
+    status: IrpGapFinding["status"];
+    summary: string;
+  }>;
+  decisions: CompletedSessionDecision[];
+  revealedInjects: CompletedSessionInject[];
+  unresolvedUnknowns: string[];
+  sessionNotes: string;
+  actionItems: string;
+}
+
+export interface CompletedSession {
+  id: string;
+  exerciseId: string;
+  completedAt: string;
+  organization: string;
+  scenario: ScenarioType;
+  overallScore: number;
+  categoryScores: SessionScoreCategory[];
+  strengths: string[];
+  gaps: string[];
+  unresolvedUnknowns: string[];
+  recommendedNextTabletop: string;
+  decisions: CompletedSessionDecision[];
+  revealedInjects: CompletedSessionInject[];
+  sessionNotes: string;
+  actionItems: string;
+  aiContext: AiSessionContext;
+  markdownReport: string;
+}
