@@ -27,7 +27,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
             <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3 sm:px-6 lg:px-8">
               <Link href="/" className="flex items-center gap-2 font-semibold text-foreground">
                 <span className="flex size-9 items-center justify-center rounded-md bg-primary text-primary-foreground">
-                  <ShieldCheck className="size-5" />
+                  <ShieldCheck className="size-5" suppressHydrationWarning />
                 </span>
                 <span>TabletopForge</span>
               </Link>

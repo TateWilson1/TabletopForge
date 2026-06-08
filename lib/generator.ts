@@ -36,23 +36,30 @@ export function generateExercise(options: ExerciseOptions): GeneratedExercise {
   const irpAnalysis = analyzeIrp(options.irpText ?? "", options.irpFileName);
   const tailoredIrpQuestions = getTailoredIrpQuestions(irpAnalysis);
   const participants = [...baseParticipants];
+  const id = crypto.randomUUID();
 
   if (options.industry === "MSP / IT Provider" || options.scenarioType === "Vendor / Third-Party Breach") {
     participants.push("Vendor/MSP Contact");
   }
 
-  const discussionQuestions = buildQuestionSet([
-    ...tailoredIrpQuestions.discussionQuestions,
-    ...content.discussionQuestions,
-    ...(options.includeExecutiveQuestions ? content.executiveQuestions : []),
-    ...(options.includeTechnicalQuestions ? content.technicalQuestions : []),
-  ]);
+  const discussionQuestions = buildQuestionSet(
+    [
+      ...tailoredIrpQuestions.discussionQuestions,
+      ...content.discussionQuestions,
+      ...(options.includeExecutiveQuestions ? content.executiveQuestions : []),
+      ...(options.includeTechnicalQuestions ? content.technicalQuestions : []),
+    ],
+    `${id}:discussion:${options.scenarioType}`,
+  );
 
-  const gapDiscoveryQuestions = buildQuestionSet([
-    ...tailoredIrpQuestions.gapQuestions,
-    ...content.gapQuestions,
-    ...(options.includeComplianceQuestions ? content.complianceQuestions : []),
-  ]);
+  const gapDiscoveryQuestions = buildQuestionSet(
+    [
+      ...tailoredIrpQuestions.gapQuestions,
+      ...content.gapQuestions,
+      ...(options.includeComplianceQuestions ? content.complianceQuestions : []),
+    ],
+    `${id}:gaps:${options.scenarioType}`,
+  );
 
   const generatedAt = new Date().toISOString();
   const organization = options.organizationName.trim();
@@ -68,7 +75,7 @@ export function generateExercise(options: ExerciseOptions): GeneratedExercise {
   };
 
   const exerciseWithoutMarkdown = {
-    id: crypto.randomUUID(),
+    id,
     generatedAt,
     overview,
     scenarioSummary: content.summary({ ...options, organizationName: organization }),
@@ -97,8 +104,8 @@ export function generateExercise(options: ExerciseOptions): GeneratedExercise {
   };
 }
 
-function buildQuestionSet(questions: string[]) {
-  return Array.from(new Set(questions)).slice(0, 12);
+function buildQuestionSet(questions: string[], seed: string) {
+  return seededShuffle(Array.from(new Set(questions)), seed).slice(0, 12);
 }
 
 function tuneByMaturity(objectives: string[], maturityLevel: ExerciseOptions["maturityLevel"]) {
@@ -189,4 +196,32 @@ function irpAnalysisSection(analysis: GeneratedExercise["irpAnalysis"]) {
   lines.push("");
 
   return lines.join("\n");
+}
+
+function seededShuffle(items: string[], seedText: string) {
+  const shuffled = [...items];
+  let seed = hashSeed(seedText);
+
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    seed = nextSeed(seed);
+    const swapIndex = seed % (index + 1);
+    [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
+  }
+
+  return shuffled;
+}
+
+function hashSeed(value: string) {
+  let hash = 2166136261;
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+
+  return hash >>> 0;
+}
+
+function nextSeed(seed: number) {
+  return (Math.imul(seed, 1664525) + 1013904223) >>> 0;
 }

@@ -16,7 +16,7 @@ const Checkbox = React.forwardRef<
     {...props}
   >
     <CheckboxPrimitive.Indicator className="flex items-center justify-center text-current">
-      <Check className="size-4" />
+      <Check className="size-4" suppressHydrationWarning />
     </CheckboxPrimitive.Indicator>
   </CheckboxPrimitive.Root>
 ));

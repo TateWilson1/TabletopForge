@@ -34,7 +34,7 @@ export function SessionRunner({ exerciseId }: { exerciseId: string }) {
       <main className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-3xl items-center justify-center px-4 py-10 sm:px-6 lg:px-8">
         <Card className="bg-card/80">
           <CardContent className="space-y-5 p-8 text-center">
-            <FileText className="mx-auto size-10 text-primary" />
+            <FileText className="mx-auto size-10 text-primary" suppressHydrationWarning />
             <div>
               <h1 className="text-2xl font-semibold">Session Not Found</h1>
               <p className="mt-3 text-muted-foreground">
@@ -44,7 +44,7 @@ export function SessionRunner({ exerciseId }: { exerciseId: string }) {
             <div className="flex flex-col justify-center gap-3 sm:flex-row">
               <Button asChild>
                 <Link href="/generate">
-                  <Plus className="size-4" />
+                  <Plus className="size-4" suppressHydrationWarning />
                   Generate Exercise
                 </Link>
               </Button>
@@ -73,13 +73,13 @@ export function SessionRunner({ exerciseId }: { exerciseId: string }) {
         <div className="flex flex-wrap gap-2">
           <Button asChild variant="outline">
             <Link href="/generate">
-              <ArrowLeft className="size-4" />
+              <ArrowLeft className="size-4" suppressHydrationWarning />
               Generator
             </Link>
           </Button>
           <Button asChild variant="outline">
             <Link href="/saved">
-              <ListChecks className="size-4" />
+              <ListChecks className="size-4" suppressHydrationWarning />
               Saved
             </Link>
           </Button>

@@ -74,17 +74,17 @@ export function SavedExercises() {
               </div>
               <div className="flex flex-wrap gap-2">
                 <Button variant="secondary" onClick={() => setSelected(exercise)}>
-                  <Eye className="size-4" />
+                  <Eye className="size-4" suppressHydrationWarning />
                   View
                 </Button>
                 <Button asChild>
                   <Link href={`/session/${exercise.id}`}>
-                    <Play className="size-4" />
+                    <Play className="size-4" suppressHydrationWarning />
                     Start
                   </Link>
                 </Button>
                 <Button variant="destructive" onClick={() => handleDelete(exercise.id)}>
-                  <Trash2 className="size-4" />
+                  <Trash2 className="size-4" suppressHydrationWarning />
                   Delete
                 </Button>
                 <Dialog>

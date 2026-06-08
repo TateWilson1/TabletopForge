@@ -49,7 +49,7 @@ export default function HomePage() {
           <div className="flex flex-col gap-3 sm:flex-row">
             <Button asChild size="lg">
               <Link href="/generate">
-                Generate Exercise <ArrowRight className="size-4" />
+                Generate Exercise <ArrowRight className="size-4" suppressHydrationWarning />
               </Link>
             </Button>
             <Button asChild size="lg" variant="outline">
@@ -62,7 +62,7 @@ export default function HomePage() {
           <CardHeader>
             <div className="flex items-center gap-3">
               <div className="flex size-11 items-center justify-center rounded-md bg-accent text-accent-foreground">
-                <GraduationCap className="size-5" />
+                <GraduationCap className="size-5" suppressHydrationWarning />
               </div>
               <div>
                 <CardTitle>Exercise Package Preview</CardTitle>
@@ -88,7 +88,7 @@ export default function HomePage() {
           {features.map((feature) => (
             <Card key={feature.title} className="bg-card/75">
               <CardHeader>
-                <feature.icon className="mb-3 size-6 text-primary" />
+                <feature.icon className="mb-3 size-6 text-primary" suppressHydrationWarning />
                 <CardTitle className="text-lg">{feature.title}</CardTitle>
               </CardHeader>
               <CardContent>

@@ -37,7 +37,7 @@ export default function AboutPage() {
         {sections.map((section) => (
           <Card key={section.title} className="bg-card/75">
             <CardHeader>
-              <section.icon className="mb-3 size-6 text-primary" />
+              <section.icon className="mb-3 size-6 text-primary" suppressHydrationWarning />
               <CardTitle>{section.title}</CardTitle>
             </CardHeader>
             <CardContent>

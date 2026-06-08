@@ -25,7 +25,7 @@ export function ExerciseOutput({
     return (
       <Card className="flex min-h-[560px] items-center justify-center bg-card/55">
         <CardContent className="max-w-md p-8 text-center">
-          <FileText className="mx-auto mb-4 size-10 text-primary" />
+          <FileText className="mx-auto mb-4 size-10 text-primary" suppressHydrationWarning />
           <h2 className="text-xl font-semibold">{emptyTitle ?? "No exercise selected"}</h2>
           <p className="mt-3 text-sm leading-6 text-muted-foreground">
             Generated tabletop packages include an overview, scenario summary, objectives, participants, discussion prompts, IRP gap questions, decisions, facilitator notes, and exportable Markdown.
@@ -79,20 +79,20 @@ export function ExerciseOutput({
           </div>
           <div className="flex flex-wrap gap-2">
             <Button variant="outline" onClick={handleCopy}>
-              <Clipboard className="size-4" />
+              <Clipboard className="size-4" suppressHydrationWarning />
               Copy Markdown
             </Button>
             <Button variant="outline" onClick={handleDownload}>
-              <Download className="size-4" />
+              <Download className="size-4" suppressHydrationWarning />
               Download Markdown
             </Button>
             <Button variant="secondary" onClick={handleSave}>
-              <Save className="size-4" />
+              <Save className="size-4" suppressHydrationWarning />
               Save
             </Button>
             <Button asChild>
               <Link href={`/session/${exercise.id}`}>
-                <Play className="size-4" />
+                <Play className="size-4" suppressHydrationWarning />
                 Start Session
               </Link>
             </Button>

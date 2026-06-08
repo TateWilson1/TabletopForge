@@ -1,10 +1,14 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ChevronLeft,
   ChevronRight,
+  Clipboard,
   ClipboardList,
+  Download,
+  Pause,
+  Play,
   Plus,
   RefreshCw,
   Sparkles,
@@ -13,40 +17,79 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import type { GeneratedExercise } from "@/lib/types";
+
+interface Inject {
+  id: string;
+  text: string;
+  fact: string;
+  unknown: string;
+}
+
+interface RevealedInject extends Inject {
+  stepTitle: string;
+}
 
 interface FacilitatorStep {
   title: string;
   label: string;
   duration: string;
+  pressure: "Low" | "Medium" | "High" | "Critical" | "Recovery";
+  pressureNote: string;
   facilitatorScript: string;
   scenarioBrief?: string;
   knownFacts: string[];
   unknowns: string[];
   prompts: string[];
   decisions: string[];
-  injects: string[];
+  injects: Inject[];
 }
 
 export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }) {
   const steps = useMemo(() => buildFacilitatorSteps(exercise), [exercise]);
   const [activeIndex, setActiveIndex] = useState(0);
-  const [revealedInjects, setRevealedInjects] = useState<string[]>([]);
+  const [revealedInjects, setRevealedInjects] = useState<RevealedInject[]>([]);
+  const [decisionStatuses, setDecisionStatuses] = useState<Record<string, boolean>>({});
   const [customInject, setCustomInject] = useState("");
   const [sessionNotes, setSessionNotes] = useState("");
   const [actionItems, setActionItems] = useState("");
+  const [exportNotice, setExportNotice] = useState("");
+  const [timerRunning, setTimerRunning] = useState(true);
+  const [remainingSeconds, setRemainingSeconds] = useState(() => durationToSeconds(steps[0]?.duration ?? "5 min"));
 
   const activeStep = steps[activeIndex];
   const progress = Math.round(((activeIndex + 1) / steps.length) * 100);
   const hasHumanFacilitator = exercise.overview.hasHumanFacilitator;
+  const activeRevealedInjects = revealedInjects.filter((inject) => inject.stepTitle === activeStep.title);
+  const knownFacts = [...activeStep.knownFacts, ...activeRevealedInjects.map((inject) => inject.fact)];
+  const unknowns = [...activeStep.unknowns, ...activeRevealedInjects.map((inject) => inject.unknown)];
+  const timerTone = remainingSeconds === 0 ? "text-destructive" : remainingSeconds <= 120 ? "text-accent" : "text-muted-foreground";
+
+  useEffect(() => {
+    setRemainingSeconds(durationToSeconds(activeStep.duration));
+    setTimerRunning(true);
+  }, [activeStep.duration]);
+
+  useEffect(() => {
+    if (!timerRunning || remainingSeconds === 0) {
+      return;
+    }
+
+    const timerId = window.setInterval(() => {
+      setRemainingSeconds((current) => Math.max(0, current - 1));
+    }, 1000);
+
+    return () => window.clearInterval(timerId);
+  }, [remainingSeconds, timerRunning]);
 
   function revealInject() {
-    const nextInject = activeStep.injects.find((inject) => !revealedInjects.includes(inject));
+    const nextInject = activeStep.injects.find((inject) => !revealedInjects.some((revealed) => revealed.id === inject.id));
 
     if (nextInject) {
-      setRevealedInjects((current) => [...current, nextInject]);
+      setRevealedInjects((current) => [...current, { ...nextInject, stepTitle: activeStep.title }]);
     }
   }
 
@@ -57,7 +100,16 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
       return;
     }
 
-    setRevealedInjects((current) => [...current, trimmed]);
+    setRevealedInjects((current) => [
+      ...current,
+      {
+        id: `${activeStep.title}:custom:${Date.now()}`,
+        text: trimmed,
+        fact: trimmed,
+        unknown: "How does this new development change scope, impact, ownership, or communications?",
+        stepTitle: activeStep.title,
+      },
+    ]);
     setCustomInject("");
   }
 
@@ -68,9 +120,35 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
   function resetSession() {
     setActiveIndex(0);
     setRevealedInjects([]);
+    setDecisionStatuses({});
     setCustomInject("");
     setSessionNotes("");
     setActionItems("");
+    setExportNotice("");
+    setRemainingSeconds(durationToSeconds(steps[0]?.duration ?? "5 min"));
+    setTimerRunning(true);
+  }
+
+  function toggleDecision(decision: string, checked: boolean) {
+    setDecisionStatuses((current) => ({ ...current, [decisionKey(activeStep.title, decision)]: checked }));
+  }
+
+  async function copySessionSummary() {
+    await navigator.clipboard.writeText(buildSessionSummary(exercise, revealedInjects, steps, decisionStatuses, sessionNotes, actionItems));
+    setExportNotice("Session summary copied.");
+  }
+
+  function downloadSessionSummary() {
+    const blob = new Blob([buildSessionSummary(exercise, revealedInjects, steps, decisionStatuses, sessionNotes, actionItems)], {
+      type: "text/markdown;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${exercise.overview.organization.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}-session-summary.md`;
+    link.click();
+    URL.revokeObjectURL(url);
+    setExportNotice("Session summary downloaded.");
   }
 
   return (
@@ -114,14 +192,20 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
                 <div className="mb-2 flex flex-wrap items-center gap-2">
                   <Badge variant="secondary">{activeStep.label}</Badge>
                   <Badge variant="outline">
-                    <Timer className="mr-1 size-3" />
+                    <Timer className="mr-1 size-3" suppressHydrationWarning />
                     {activeStep.duration}
+                  </Badge>
+                  <Badge
+                    variant={activeStep.pressure === "High" ? "secondary" : "outline"}
+                    className={activeStep.pressure === "Critical" ? "border-destructive/60 text-destructive" : ""}
+                  >
+                    {activeStep.pressure} pressure
                   </Badge>
                 </div>
                 <CardTitle>{activeStep.title}</CardTitle>
               </div>
               <Button variant="outline" onClick={resetSession}>
-                <RefreshCw className="size-4" />
+                <RefreshCw className="size-4" suppressHydrationWarning />
                 Reset
               </Button>
             </div>
@@ -129,10 +213,24 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
           <CardContent className="space-y-6">
             <section className="rounded-md border border-primary/30 bg-primary/10 p-4">
               <div className="mb-2 flex items-center gap-2 text-sm font-medium text-primary">
-                <Sparkles className="size-4" />
+                <Sparkles className="size-4" suppressHydrationWarning />
                 {hasHumanFacilitator ? "Facilitator Script" : "TabletopForge Facilitator"}
               </div>
               <p className="leading-7 text-muted-foreground">{activeStep.facilitatorScript}</p>
+            </section>
+
+            <section className="grid gap-3 rounded-md border border-border bg-background/55 p-4 sm:grid-cols-[1fr_auto] sm:items-center">
+              <div>
+                <div className="text-sm font-medium text-foreground">Stage Timer</div>
+                <p className="mt-1 text-sm leading-6 text-muted-foreground">{activeStep.pressureNote}</p>
+              </div>
+              <div className="flex items-center gap-3 sm:justify-end">
+                <span className={`min-w-16 text-right text-2xl font-semibold tabular-nums ${timerTone}`}>{formatSeconds(remainingSeconds)}</span>
+                <Button variant="outline" size="sm" onClick={() => setTimerRunning((current) => !current)}>
+                  {timerRunning ? <Pause className="size-4" suppressHydrationWarning /> : <Play className="size-4" suppressHydrationWarning />}
+                  {timerRunning ? "Pause" : "Resume"}
+                </Button>
+              </div>
             </section>
 
             {activeStep.scenarioBrief ? (
@@ -144,7 +242,14 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
               </section>
             ) : null}
 
-            <TriageBoard knownFacts={activeStep.knownFacts} unknowns={activeStep.unknowns} decisions={activeStep.decisions} />
+            <TriageBoard
+              knownFacts={knownFacts}
+              unknowns={unknowns}
+              decisions={activeStep.decisions}
+              stepTitle={activeStep.title}
+              decisionStatuses={decisionStatuses}
+              onToggleDecision={toggleDecision}
+            />
 
             <PromptList title={hasHumanFacilitator ? "Ask The Room" : "Discuss This Now"} items={activeStep.prompts} />
 
@@ -160,18 +265,18 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
                       : "Use this when the team is ready for the situation to evolve."}
                   </p>
                 </div>
-                <Button onClick={revealInject} disabled={activeStep.injects.every((inject) => revealedInjects.includes(inject))}>
-                  <Sparkles className="size-4" />
+                <Button onClick={revealInject} disabled={activeStep.injects.every((inject) => revealedInjects.some((revealed) => revealed.id === inject.id))}>
+                  <Sparkles className="size-4" suppressHydrationWarning />
                   {hasHumanFacilitator ? "Reveal Inject" : "Reveal Next Development"}
                 </Button>
               </div>
 
               <div className="space-y-2">
-                {revealedInjects.length > 0 ? (
-                  revealedInjects.map((inject, index) => (
-                    <div key={`${inject}-${index}`} className="rounded-md border border-accent/40 bg-accent/10 p-3 text-sm leading-6">
+                {activeRevealedInjects.length > 0 ? (
+                  activeRevealedInjects.map((inject, index) => (
+                    <div key={inject.id} className="rounded-md border border-accent/40 bg-accent/10 p-3 text-sm leading-6">
                       <span className="font-medium text-accent">Inject {index + 1}: </span>
-                      <span className="text-muted-foreground">{inject}</span>
+                      <span className="text-muted-foreground">{inject.text}</span>
                     </div>
                   ))
                 ) : (
@@ -193,7 +298,7 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
                   className="min-h-[88px]"
                 />
                 <Button variant="secondary" onClick={addCustomInject} className="sm:self-start">
-                  <Plus className="size-4" />
+                  <Plus className="size-4" suppressHydrationWarning />
                   Add Live Inject
                 </Button>
               </div>
@@ -201,12 +306,12 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
 
             <div className="flex flex-col gap-3 sm:flex-row sm:justify-between">
               <Button variant="outline" onClick={() => moveStep(-1)} disabled={activeIndex === 0}>
-                <ChevronLeft className="size-4" />
+                <ChevronLeft className="size-4" suppressHydrationWarning />
                 Back
               </Button>
               <Button onClick={() => moveStep(1)} disabled={activeIndex === steps.length - 1}>
                 Next
-                <ChevronRight className="size-4" />
+                <ChevronRight className="size-4" suppressHydrationWarning />
               </Button>
             </div>
           </CardContent>
@@ -215,10 +320,25 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
 
       <Card className="bg-background/45">
         <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-lg">
-            <ClipboardList className="size-5 text-primary" />
-            {hasHumanFacilitator ? "Facilitator Notes" : "Session Notes"}
-          </CardTitle>
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2 text-lg">
+                <ClipboardList className="size-5 text-primary" suppressHydrationWarning />
+                {hasHumanFacilitator ? "Facilitator Notes" : "Session Notes"}
+              </CardTitle>
+              {exportNotice ? <p className="mt-2 text-sm text-primary">{exportNotice}</p> : null}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" onClick={copySessionSummary}>
+                <Clipboard className="size-4" suppressHydrationWarning />
+                Copy Summary
+              </Button>
+              <Button variant="outline" onClick={downloadSessionSummary}>
+                <Download className="size-4" suppressHydrationWarning />
+                Download Summary
+              </Button>
+            </div>
+          </div>
         </CardHeader>
         <CardContent className="grid gap-4 lg:grid-cols-2">
           <div className="space-y-2">
@@ -264,12 +384,32 @@ function PromptList({ title, items }: { title: string; items: string[] }) {
   );
 }
 
-function TriageBoard({ knownFacts, unknowns, decisions }: { knownFacts: string[]; unknowns: string[]; decisions: string[] }) {
+function TriageBoard({
+  knownFacts,
+  unknowns,
+  decisions,
+  stepTitle,
+  decisionStatuses,
+  onToggleDecision,
+}: {
+  knownFacts: string[];
+  unknowns: string[];
+  decisions: string[];
+  stepTitle: string;
+  decisionStatuses: Record<string, boolean>;
+  onToggleDecision: (decision: string, checked: boolean) => void;
+}) {
   return (
     <section className="grid gap-4 xl:grid-cols-3">
       <BoardList title="Facts Known" items={knownFacts} />
       <BoardList title="Unknowns" items={unknowns} />
-      <BoardList title="Decisions Needed" items={decisions} />
+      <DecisionList
+        title="Decisions Needed"
+        items={decisions}
+        stepTitle={stepTitle}
+        decisionStatuses={decisionStatuses}
+        onToggleDecision={onToggleDecision}
+      />
     </section>
   );
 }
@@ -289,6 +429,41 @@ function BoardList({ title, items }: { title: string; items: string[] }) {
   );
 }
 
+function DecisionList({
+  title,
+  items,
+  stepTitle,
+  decisionStatuses,
+  onToggleDecision,
+}: {
+  title: string;
+  items: string[];
+  stepTitle: string;
+  decisionStatuses: Record<string, boolean>;
+  onToggleDecision: (decision: string, checked: boolean) => void;
+}) {
+  return (
+    <div className="rounded-md border border-border bg-background/45 p-4">
+      <h3 className="mb-3 text-sm font-semibold text-foreground">{title}</h3>
+      <ul className="space-y-3">
+        {items.map((item) => {
+          const checked = decisionStatuses[decisionKey(stepTitle, item)] === true;
+
+          return (
+            <li key={item} className="flex gap-3 text-sm leading-6 text-muted-foreground">
+              <Checkbox checked={checked} onCheckedChange={(value) => onToggleDecision(item, value === true)} className="mt-1" />
+              <div className="space-y-1">
+                <p>{item}</p>
+                <Badge variant={checked ? "secondary" : "outline"}>{checked ? "Decided" : "Unresolved"}</Badge>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
 function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
   const focusGaps = exercise.irpAnalysis?.findings.filter((finding) => finding.status !== "found").slice(0, 3) ?? [];
   const gapPrompts = focusGaps.map((finding) => `The IRP scan flagged ${finding.label.toLowerCase()}. How would the team handle that gap during this incident?`);
@@ -299,6 +474,8 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
       label: "Step 1",
       title: "Kickoff And Ground Rules",
       duration: "5 min",
+      pressure: "Low",
+      pressureNote: "Use this stage to establish roles and scope before the scenario pressure starts.",
       facilitatorScript: hasHumanFacilitator
         ? `Start by reminding the group that this is a no-fault discussion for ${exercise.overview.organization}. The goal is to test decision-making, ownership, and the IRP, not to prove technical expertise.`
         : `Welcome to the ${exercise.overview.organization} tabletop exercise. This is a no-fault discussion. Your goal is to talk through decisions, ownership, communications, and IRP gaps. Assign one person to read responses aloud and one person to capture notes before moving on.`,
@@ -333,6 +510,8 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
       label: "Step 2",
       title: "Initial Report",
       duration: "10 min",
+      pressure: "Medium",
+      pressureNote: "The team should triage quickly, but it still has room to ask clarifying questions.",
       facilitatorScript: hasHumanFacilitator
         ? `Read the scenario aloud, then ask the group to describe the first 15 minutes of response. Keep pulling the conversation back to who owns each action and where it is written down.`
         : `Read the scenario below as if it just happened. Discuss the first 15 minutes of response. Do not jump straight to technical fixes. Name who receives the report, who owns each action, and where the IRP supports that answer.`,
@@ -364,6 +543,8 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
       label: "Step 3",
       title: "Escalation And Containment",
       duration: "15 min",
+      pressure: "High",
+      pressureNote: "Containment choices may create business impact, so decisions should become sharper here.",
       facilitatorScript: hasHumanFacilitator
         ? "Increase pressure slightly. Ask what the team can do immediately, what needs approval, and what business risk each containment choice creates."
         : "The situation is getting more serious. Before you reveal another development, decide what the team can do immediately, what requires approval, and what business risk each containment choice creates.",
@@ -395,6 +576,8 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
       label: "Step 4",
       title: "Communications And Impact",
       duration: "15 min",
+      pressure: "Critical",
+      pressureNote: "Pressure is highest here because leadership, legal, and stakeholder messaging can diverge quickly.",
       facilitatorScript: hasHumanFacilitator
         ? "Shift to communication, leadership updates, legal/compliance involvement, and stakeholder expectations. Ask the group to avoid vague answers like 'we would notify people' and name the audience, owner, and message."
         : "Now focus on communications and impact. Avoid vague answers like 'we would notify people.' Name the audience, message owner, approval path, and what facts are confirmed before any update is sent.",
@@ -430,6 +613,8 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
       label: "Step 5",
       title: "Recovery And Lessons Learned",
       duration: "15 min",
+      pressure: "Recovery",
+      pressureNote: "Shift from urgent response to ownership, follow-through, and proof that gaps will be fixed.",
       facilitatorScript: hasHumanFacilitator
         ? "Close by turning gaps into improvements. Every unclear answer should become an action item with an owner, due date, and priority."
         : "Close the exercise by turning every unclear answer into an improvement item. Do not leave this section until each major gap has an owner, due date, and priority.",
@@ -610,8 +795,23 @@ const scenarioInjects: Record<GeneratedExercise["overview"]["scenario"], Partial
 function buildInjects(exercise: GeneratedExercise, stage: InjectStage, commonInjects: string[], count = 3) {
   const scenarioSpecific = scenarioInjects[exercise.overview.scenario][stage] ?? [];
   const pool = [...scenarioSpecific, ...commonInjects];
-  return seededShuffle(pool, `${exercise.id}:${stage}:${exercise.overview.scenario}`).slice(0, count);
+  return seededShuffle(pool, `${exercise.id}:${stage}:${exercise.overview.scenario}`)
+    .slice(0, count)
+    .map((text, index) => ({
+      id: `${stage}:${index}:${hashSeed(`${exercise.id}:${text}`)}`,
+      text,
+      fact: text,
+      unknown: stageUnknowns[stage],
+    }));
 }
+
+const stageUnknowns: Record<InjectStage, string> = {
+  kickoff: "Does this change who needs to participate or what should be in scope?",
+  initial: "Does this change incident severity, scope, reporting path, or evidence needs?",
+  containment: "Does this change containment authority, business impact, or evidence preservation?",
+  communications: "Does this change who must be briefed, what can be said, or what approvals are needed?",
+  recovery: "Does this change action-item priority, ownership, validation, or retest timing?",
+};
 
 function seededShuffle(items: string[], seedText: string) {
   const shuffled = [...items];
@@ -639,4 +839,63 @@ function hashSeed(value: string) {
 
 function nextSeed(seed: number) {
   return (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+}
+
+function durationToSeconds(duration: string) {
+  const minutes = Number.parseInt(duration, 10);
+  return Number.isFinite(minutes) ? minutes * 60 : 300;
+}
+
+function formatSeconds(totalSeconds: number) {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
+function decisionKey(stepTitle: string, decision: string) {
+  return `${stepTitle}:${decision}`;
+}
+
+function buildSessionSummary(
+  exercise: GeneratedExercise,
+  revealedInjects: RevealedInject[],
+  steps: FacilitatorStep[],
+  decisionStatuses: Record<string, boolean>,
+  sessionNotes: string,
+  actionItems: string,
+) {
+  const lines = [
+    exercise.markdownReport,
+    "",
+    "## Live Session Summary",
+    `- Session exported: ${new Date().toISOString()}`,
+    `- Session mode: ${exercise.overview.hasHumanFacilitator ? "Human facilitator assisted" : "TabletopForge facilitated"}`,
+    "",
+    "### Revealed Injects",
+  ];
+
+  if (revealedInjects.length === 0) {
+    lines.push("- None revealed.");
+  } else {
+    revealedInjects.forEach((inject) => lines.push(`- ${inject.stepTitle}: ${inject.text}`));
+  }
+
+  lines.push("");
+  lines.push("### Decisions");
+  steps.forEach((step) => {
+    lines.push(`#### ${step.title}`);
+    step.decisions.forEach((decision) => {
+      lines.push(`- [${decisionStatuses[decisionKey(step.title, decision)] ? "x" : " "}] ${decision}`);
+    });
+    lines.push("");
+  });
+
+  lines.push("### Discussion Notes");
+  lines.push(sessionNotes.trim() || "No discussion notes captured.");
+  lines.push("");
+  lines.push("### Action Items");
+  lines.push(actionItems.trim() || "No action items captured.");
+  lines.push("");
+
+  return lines.join("\n");
 }

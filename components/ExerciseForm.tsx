@@ -161,7 +161,7 @@ export function ExerciseForm() {
               </div>
               {options.irpText ? (
                 <Button variant="ghost" size="sm" onClick={clearIrp}>
-                  <X className="size-4" />
+                  <X className="size-4" suppressHydrationWarning />
                   Clear
                 </Button>
               ) : null}
@@ -195,7 +195,7 @@ export function ExerciseForm() {
 
             {options.irpText ? (
               <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-                <FileText className="size-4 text-primary" />
+                <FileText className="size-4 text-primary" suppressHydrationWarning />
                 <span>{options.irpFileName || "IRP text loaded"}</span>
                 <span>{Math.max(1, options.irpText.trim().split(/\s+/).filter(Boolean).length)} words</span>
               </div>
@@ -247,7 +247,7 @@ export function ExerciseForm() {
           {savedNotice ? <p className="text-sm text-primary">{savedNotice}</p> : null}
 
           <Button className="w-full" size="lg" onClick={handleGenerate}>
-            <Wand2 className="size-4" />
+            <Wand2 className="size-4" suppressHydrationWarning />
             Generate Tabletop Exercise
           </Button>
         </CardContent>
