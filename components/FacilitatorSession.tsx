@@ -374,8 +374,8 @@ function PromptList({ title, items }: { title: string; items: string[] }) {
     <section>
       <h3 className="mb-3 font-semibold">{title}</h3>
       <ul className="space-y-2">
-        {items.map((item) => (
-          <li key={item} className="rounded-md border border-border bg-background/45 p-3 text-sm leading-6 text-muted-foreground">
+        {items.map((item, index) => (
+          <li key={`${title}-${index}-${item}`} className="rounded-md border border-border bg-background/45 p-3 text-sm leading-6 text-muted-foreground">
             {item}
           </li>
         ))}
@@ -419,8 +419,8 @@ function BoardList({ title, items }: { title: string; items: string[] }) {
     <div className="rounded-md border border-border bg-background/45 p-4">
       <h3 className="mb-3 text-sm font-semibold text-foreground">{title}</h3>
       <ul className="space-y-2">
-        {items.map((item) => (
-          <li key={item} className="text-sm leading-6 text-muted-foreground">
+        {items.map((item, index) => (
+          <li key={`${title}-${index}-${item}`} className="text-sm leading-6 text-muted-foreground">
             {item}
           </li>
         ))}
@@ -446,11 +446,11 @@ function DecisionList({
     <div className="rounded-md border border-border bg-background/45 p-4">
       <h3 className="mb-3 text-sm font-semibold text-foreground">{title}</h3>
       <ul className="space-y-3">
-        {items.map((item) => {
+        {items.map((item, index) => {
           const checked = decisionStatuses[decisionKey(stepTitle, item)] === true;
 
           return (
-            <li key={item} className="flex gap-3 text-sm leading-6 text-muted-foreground">
+            <li key={`${stepTitle}-${index}-${item}`} className="flex gap-3 text-sm leading-6 text-muted-foreground">
               <Checkbox checked={checked} onCheckedChange={(value) => onToggleDecision(item, value === true)} className="mt-1" />
               <div className="space-y-1">
                 <p>{item}</p>
