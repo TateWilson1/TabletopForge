@@ -15,6 +15,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { buildCompletedSessionHtmlReport, downloadTextFile, safeFilename } from "@/lib/report-export";
 import { deleteCompletedSession, deleteExercise, getCompletedSessions, getSavedExercises } from "@/lib/storage";
 import type { CompletedSession, GeneratedExercise } from "@/lib/types";
 
@@ -46,6 +47,11 @@ export function SavedExercises() {
   async function handleCopyCompleted(session: CompletedSession) {
     await navigator.clipboard.writeText(session.markdownReport);
     setCompletedNotice(`${session.organization} scorecard copied.`);
+  }
+
+  function handleDownloadCompleted(session: CompletedSession) {
+    downloadTextFile(buildCompletedSessionHtmlReport(session), `${safeFilename(session.organization)}-scorecard-report.html`, "text/html;charset=utf-8");
+    setCompletedNotice(`${session.organization} readable scorecard downloaded.`);
   }
 
   if (saved.length === 0 && completed.length === 0) {
@@ -153,8 +159,25 @@ export function SavedExercises() {
                   <div className="flex flex-wrap gap-2">
                     <Button variant="secondary" onClick={() => handleCopyCompleted(session)}>
                       <Eye className="size-4" suppressHydrationWarning />
-                      Copy Report
+                      Copy Markdown
                     </Button>
+                    <Button variant="outline" onClick={() => handleDownloadCompleted(session)}>
+                      Download Report
+                    </Button>
+                    <Dialog>
+                      <DialogTrigger asChild>
+                        <Button variant="outline">View Scorecard</Button>
+                      </DialogTrigger>
+                      <DialogContent>
+                        <DialogHeader>
+                          <DialogTitle>{session.organization} Scorecard</DialogTitle>
+                          <DialogDescription>
+                            {session.readinessTier ?? "Readiness"} - {session.overallScore}/100
+                          </DialogDescription>
+                        </DialogHeader>
+                        <CompletedScorecardDetails session={session} />
+                      </DialogContent>
+                    </Dialog>
                     <Button variant="destructive" onClick={() => handleDeleteCompleted(session.id)}>
                       <Trash2 className="size-4" suppressHydrationWarning />
                       Delete
@@ -168,6 +191,58 @@ export function SavedExercises() {
       </div>
 
       <ExerciseOutput exercise={selected ?? saved[0] ?? null} emptyTitle="Select a saved exercise" />
+    </div>
+  );
+}
+
+function CompletedScorecardDetails({ session }: { session: CompletedSession }) {
+  return (
+    <div className="max-h-[72vh] space-y-5 overflow-y-auto pr-2">
+      <div className="grid gap-3 sm:grid-cols-2">
+        {session.categoryScores.map((category) => (
+          <div key={category.id} className="rounded-md border border-border bg-background/45 p-3">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm font-medium">{category.label}</p>
+              <Badge variant={(category.score ?? 0) >= 75 ? "secondary" : "outline"}>{category.score === null ? "N/A" : `${category.score}/100`}</Badge>
+            </div>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">{category.summary}</p>
+          </div>
+        ))}
+      </div>
+
+      <DetailList title="Top Risks" items={session.topRisks ?? session.gaps.slice(0, 3)} />
+      <DetailList title="Suggested Action Items" items={session.recommendedActionItems ?? []} />
+      <DetailList title="Unresolved Unknowns" items={session.unresolvedUnknowns} />
+
+      {session.improvementPlan?.length ? (
+        <div>
+          <h3 className="text-sm font-semibold">30 / 60 / 90 Day Plan</h3>
+          <div className="mt-2 grid gap-2">
+            {session.improvementPlan.map((item) => (
+              <div key={item.window} className="rounded-md border border-border bg-background/45 p-3">
+                <Badge variant="secondary">{item.window}</Badge>
+                <p className="mt-2 text-sm font-medium">{item.focus}</p>
+                <p className="mt-1 text-sm leading-6 text-muted-foreground">{item.outcome}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function DetailList({ title, items }: { title: string; items: string[] }) {
+  return (
+    <div>
+      <h3 className="text-sm font-semibold">{title}</h3>
+      <ul className="mt-2 space-y-2">
+        {(items.length ? items : ["None captured."]).map((item, index) => (
+          <li key={`${title}-${index}-${item}`} className="rounded-md border border-border bg-background/45 p-3 text-sm leading-6 text-muted-foreground">
+            {item}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

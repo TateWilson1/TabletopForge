@@ -63,6 +63,7 @@ export function generateExercise(options: ExerciseOptions): GeneratedExercise {
 
   const generatedAt = new Date().toISOString();
   const organization = options.organizationName.trim();
+  const customScenarioDetails = options.customScenarioDetails?.trim();
   const overview = {
     organization,
     industry: options.industry,
@@ -78,7 +79,10 @@ export function generateExercise(options: ExerciseOptions): GeneratedExercise {
     id,
     generatedAt,
     overview,
-    scenarioSummary: content.summary({ ...options, organizationName: organization }),
+    scenarioSummary: [content.summary({ ...options, organizationName: organization }), customScenarioDetails ? `Additional exercise context: ${customScenarioDetails}` : ""]
+      .filter(Boolean)
+      .join(" "),
+    customScenarioDetails,
     objectives: tuneByMaturity(
       [
         ...(irpAnalysis ? ["Validate whether known IRP gaps would slow or weaken the response."] : []),
@@ -93,7 +97,7 @@ export function generateExercise(options: ExerciseOptions): GeneratedExercise {
     facilitatorNotes,
     irpAnalysis,
     lessonsLearnedTemplate: options.includeLessonsLearned ? lessonsLearnedTemplate : undefined,
-    executiveSummary: `${organization} will walk through a realistic ${options.scenarioType.toLowerCase()} tabletop exercise designed for ${options.industry.toLowerCase()} organizations with ${options.organizationSize} employees. The discussion should reveal whether the incident response plan clearly defines escalation, containment authority, communications, evidence handling, and after-action ownership without requiring a deeply technical exercise format.${irpAnalysis ? ` The uploaded IRP scan found ${irpAnalysis.findings.filter((finding) => finding.status !== "found").length} likely weak or missing areas, so the questions emphasize those plan gaps.` : ""}`,
+    executiveSummary: `${organization} will walk through a realistic ${options.scenarioType.toLowerCase()} tabletop exercise designed for ${options.industry.toLowerCase()} organizations with ${options.organizationSize} employees. The discussion should reveal whether the incident response plan clearly defines escalation, containment authority, communications, evidence handling, and after-action ownership without requiring a deeply technical exercise format.${customScenarioDetails ? " The custom scenario context has been included in the scenario summary and should guide discussion examples." : ""}${irpAnalysis ? ` The uploaded IRP scan found ${irpAnalysis.findings.filter((finding) => finding.status !== "found").length} likely weak or missing areas, so the questions emphasize those plan gaps.` : ""}`,
   };
 
   const markdownReport = createMarkdownReport(exerciseWithoutMarkdown);
@@ -137,6 +141,7 @@ function createMarkdownReport(exercise: Omit<GeneratedExercise, "markdownReport"
     "## Scenario Summary",
     exercise.scenarioSummary,
     "",
+    ...(exercise.customScenarioDetails ? ["## Custom Scenario Details", exercise.customScenarioDetails, ""] : []),
     listSection("Exercise Objectives", exercise.objectives),
     listSection("Suggested Participants", exercise.suggestedParticipants),
     irpAnalysisSection(exercise.irpAnalysis),

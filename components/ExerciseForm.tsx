@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { FileText, ShieldCheck, Wand2, X } from "lucide-react";
+import { FileText, ShieldCheck, Sparkles, Wand2, X } from "lucide-react";
 import { ExerciseOutput } from "@/components/ExerciseOutput";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -37,6 +37,7 @@ const defaultOptions: ExerciseOptions = {
   includeComplianceQuestions: true,
   includeLessonsLearned: true,
   hasHumanFacilitator: false,
+  customScenarioDetails: "",
   irpText: "",
   irpFileName: "",
 };
@@ -133,6 +134,17 @@ export function ExerciseForm() {
             values={scenarioTypes}
             onChange={(value) => updateOption("scenarioType", value)}
           />
+
+          <div className="space-y-2">
+            <Label htmlFor="customScenarioDetails">Scenario details</Label>
+            <Textarea
+              id="customScenarioDetails"
+              value={options.customScenarioDetails}
+              onChange={(event) => updateOption("customScenarioDetails", event.target.value)}
+              placeholder="Optional: add details like affected systems, business context, staff concerns, or the specific situation you want the exercise to include."
+              className="min-h-[96px]"
+            />
+          </div>
 
           <div className="grid gap-4 sm:grid-cols-2">
             <SelectField
@@ -254,6 +266,21 @@ export function ExerciseForm() {
 
           {error ? <p className="text-sm text-destructive">{error}</p> : null}
           {savedNotice ? <p className="text-sm text-primary">{savedNotice}</p> : null}
+
+          <section className="rounded-lg border border-border bg-background/40 p-4">
+            <div className="flex items-start gap-3">
+              <Sparkles className="mt-1 size-5 text-muted-foreground" suppressHydrationWarning />
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-sm font-semibold">AI mode</h2>
+                  <Badge variant="outline">Not enabled</Badge>
+                </div>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                  The current version uses local rules only. Future AI mode will require opt-in, a backend, hidden API keys, and usage limits.
+                </p>
+              </div>
+            </div>
+          </section>
 
           <Button className="w-full" size="lg" onClick={handleGenerate}>
             <Wand2 className="size-4" suppressHydrationWarning />

@@ -16,6 +16,7 @@ const navItems = [
   { href: "/generate", label: "Generate" },
   { href: "/saved", label: "Saved" },
   { href: "/about", label: "About" },
+  { href: "/privacy", label: "Privacy" },
 ];
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

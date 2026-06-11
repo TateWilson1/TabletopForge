@@ -50,6 +50,7 @@ export interface ExerciseOptions {
   includeComplianceQuestions: boolean;
   includeLessonsLearned: boolean;
   hasHumanFacilitator: boolean;
+  customScenarioDetails?: string;
   irpText?: string;
   irpFileName?: string;
 }
@@ -75,6 +76,7 @@ export interface GeneratedExercise {
     purpose: string;
   };
   scenarioSummary: string;
+  customScenarioDetails?: string;
   objectives: string[];
   suggestedParticipants: string[];
   discussionQuestions: string[];
@@ -148,7 +150,7 @@ export interface AiSessionContext {
   unresolvedUnknowns: string[];
   completedSteps: string[];
   stepNotes: Record<string, string>;
-  readinessTier: CompletedSession["readinessTier"];
+  readinessTier: "Developing" | "Functional" | "Strong" | "Exercise Ready";
   topRisks: string[];
   recommendedActionItems: string[];
   improvementPlan: CompletedSessionImprovementPlanItem[];
