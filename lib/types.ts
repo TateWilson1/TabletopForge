@@ -124,8 +124,14 @@ export interface CompletedSessionInject {
   text: string;
 }
 
+export interface CompletedSessionImprovementPlanItem {
+  window: "30 days" | "60 days" | "90 days";
+  focus: string;
+  outcome: string;
+}
+
 export interface AiSessionContext {
-  schemaVersion: "tabletopforge.session.v1";
+  schemaVersion: "tabletopforge.session.v2";
   exerciseId: string;
   organization: string;
   scenario: ScenarioType;
@@ -140,6 +146,12 @@ export interface AiSessionContext {
   decisions: CompletedSessionDecision[];
   revealedInjects: CompletedSessionInject[];
   unresolvedUnknowns: string[];
+  completedSteps: string[];
+  stepNotes: Record<string, string>;
+  readinessTier: CompletedSession["readinessTier"];
+  topRisks: string[];
+  recommendedActionItems: string[];
+  improvementPlan: CompletedSessionImprovementPlanItem[];
   sessionNotes: string;
   actionItems: string;
 }
@@ -151,13 +163,19 @@ export interface CompletedSession {
   organization: string;
   scenario: ScenarioType;
   overallScore: number;
+  readinessTier: "Developing" | "Functional" | "Strong" | "Exercise Ready";
   categoryScores: SessionScoreCategory[];
   strengths: string[];
   gaps: string[];
+  topRisks: string[];
+  recommendedActionItems: string[];
+  improvementPlan: CompletedSessionImprovementPlanItem[];
   unresolvedUnknowns: string[];
   recommendedNextTabletop: string;
   decisions: CompletedSessionDecision[];
   revealedInjects: CompletedSessionInject[];
+  completedSteps: string[];
+  stepNotes: Record<string, string>;
   sessionNotes: string;
   actionItems: string;
   aiContext: AiSessionContext;

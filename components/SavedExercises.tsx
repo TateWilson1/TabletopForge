@@ -137,13 +137,18 @@ export function SavedExercises() {
                         }).format(new Date(session.completedAt))}
                       </CardDescription>
                     </div>
-                    <Badge variant={session.overallScore >= 75 ? "secondary" : "outline"}>{session.overallScore}/100</Badge>
+                    <Badge variant={session.overallScore >= 75 ? "secondary" : "outline"}>
+                      {session.readinessTier ?? "Readiness"} {session.overallScore}/100
+                    </Badge>
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <div>
                     <p className="text-sm font-medium">{session.scenario}</p>
                     <p className="mt-1 text-sm text-muted-foreground">{session.recommendedNextTabletop}</p>
+                    {session.recommendedActionItems?.[0] ? (
+                      <p className="mt-2 text-sm text-muted-foreground">Next action: {session.recommendedActionItems[0]}</p>
+                    ) : null}
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <Button variant="secondary" onClick={() => handleCopyCompleted(session)}>

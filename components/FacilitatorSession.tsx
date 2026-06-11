@@ -1,19 +1,23 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Award,
+  CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  Clock,
   Clipboard,
   ClipboardList,
   Download,
+  Lightbulb,
+  ListTodo,
   Pause,
   Play,
   Plus,
   RefreshCw,
+  ShieldCheck,
   Sparkles,
-  Timer,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -22,7 +26,13 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { saveCompletedSession } from "@/lib/storage";
-import type { CompletedSession, CompletedSessionDecision, GeneratedExercise, SessionScoreCategory } from "@/lib/types";
+import type {
+  CompletedSession,
+  CompletedSessionDecision,
+  CompletedSessionImprovementPlanItem,
+  GeneratedExercise,
+  SessionScoreCategory,
+} from "@/lib/types";
 
 interface Inject {
   id: string;
@@ -60,8 +70,11 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
   const [actionItems, setActionItems] = useState("");
   const [exportNotice, setExportNotice] = useState("");
   const [completedSession, setCompletedSession] = useState<CompletedSession | null>(null);
-  const [timerRunning, setTimerRunning] = useState(true);
-  const [remainingSeconds, setRemainingSeconds] = useState(() => durationToSeconds(steps[0]?.duration ?? "5 min"));
+  const [isPaused, setIsPaused] = useState(false);
+  const [completedSteps, setCompletedSteps] = useState<Record<string, boolean>>({});
+  const [stepNotes, setStepNotes] = useState<Record<string, string>>({});
+  const [skippedInjectIds, setSkippedInjectIds] = useState<string[]>([]);
+  const [facilitatorHint, setFacilitatorHint] = useState("");
 
   const activeStep = steps[activeIndex];
   const progress = Math.round(((activeIndex + 1) / steps.length) * 100);
@@ -69,30 +82,24 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
   const activeRevealedInjects = revealedInjects.filter((inject) => inject.stepTitle === activeStep.title);
   const knownFacts = [...activeStep.knownFacts, ...activeRevealedInjects.map((inject) => inject.fact)];
   const unknowns = [...activeStep.unknowns, ...activeRevealedInjects.map((inject) => inject.unknown)];
-  const timerTone = remainingSeconds === 0 ? "text-destructive" : remainingSeconds <= 120 ? "text-accent" : "text-muted-foreground";
-
-  useEffect(() => {
-    setRemainingSeconds(durationToSeconds(activeStep.duration));
-    setTimerRunning(true);
-  }, [activeStep.duration]);
-
-  useEffect(() => {
-    if (!timerRunning || remainingSeconds === 0) {
-      return;
-    }
-
-    const timerId = window.setInterval(() => {
-      setRemainingSeconds((current) => Math.max(0, current - 1));
-    }, 1000);
-
-    return () => window.clearInterval(timerId);
-  }, [remainingSeconds, timerRunning]);
+  const availableInjects = activeStep.injects.filter(
+    (inject) => !revealedInjects.some((revealed) => revealed.id === inject.id) && !skippedInjectIds.includes(inject.id),
+  );
 
   function revealInject() {
-    const nextInject = activeStep.injects.find((inject) => !revealedInjects.some((revealed) => revealed.id === inject.id));
+    const nextInject = availableInjects[0];
 
     if (nextInject) {
       setRevealedInjects((current) => [...current, { ...nextInject, stepTitle: activeStep.title }]);
+    }
+  }
+
+  function skipInject() {
+    const nextInject = availableInjects[0];
+
+    if (nextInject) {
+      setSkippedInjectIds((current) => [...current, nextInject.id]);
+      setExportNotice("Inject skipped. You can keep the discussion focused on the current situation.");
     }
   }
 
@@ -118,34 +125,51 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
 
   function moveStep(direction: -1 | 1) {
     setActiveIndex((current) => Math.min(steps.length - 1, Math.max(0, current + direction)));
+    setFacilitatorHint("");
   }
 
   function resetSession() {
     setActiveIndex(0);
     setRevealedInjects([]);
     setDecisionStatuses({});
+    setCompletedSteps({});
+    setStepNotes({});
+    setSkippedInjectIds([]);
+    setFacilitatorHint("");
     setCustomInject("");
     setSessionNotes("");
     setActionItems("");
     setExportNotice("");
     setCompletedSession(null);
-    setRemainingSeconds(durationToSeconds(steps[0]?.duration ?? "5 min"));
-    setTimerRunning(true);
+    setIsPaused(false);
   }
 
   function toggleDecision(decision: string, checked: boolean) {
     setDecisionStatuses((current) => ({ ...current, [decisionKey(activeStep.title, decision)]: checked }));
   }
 
+  function toggleStepComplete(checked: boolean) {
+    setCompletedSteps((current) => ({ ...current, [activeStep.title]: checked }));
+  }
+
+  function updateStepNote(value: string) {
+    setStepNotes((current) => ({ ...current, [activeStep.title]: value }));
+  }
+
   async function copySessionSummary() {
-    await navigator.clipboard.writeText(completedSession?.markdownReport ?? buildSessionSummary(exercise, revealedInjects, steps, decisionStatuses, sessionNotes, actionItems));
+    await navigator.clipboard.writeText(
+      completedSession?.markdownReport ?? buildSessionSummary(exercise, revealedInjects, steps, decisionStatuses, stepNotes, completedSteps, sessionNotes, actionItems),
+    );
     setExportNotice(completedSession ? "Scorecard summary copied." : "Session summary copied.");
   }
 
   function downloadSessionSummary() {
-    const blob = new Blob([completedSession?.markdownReport ?? buildSessionSummary(exercise, revealedInjects, steps, decisionStatuses, sessionNotes, actionItems)], {
-      type: "text/markdown;charset=utf-8",
-    });
+    const blob = new Blob(
+      [completedSession?.markdownReport ?? buildSessionSummary(exercise, revealedInjects, steps, decisionStatuses, stepNotes, completedSteps, sessionNotes, actionItems)],
+      {
+        type: "text/markdown;charset=utf-8",
+      },
+    );
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
@@ -156,11 +180,11 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
   }
 
   function endExercise() {
-    const scorecard = buildCompletedSession(exercise, revealedInjects, steps, decisionStatuses, sessionNotes, actionItems);
+    const scorecard = buildCompletedSession(exercise, revealedInjects, steps, decisionStatuses, stepNotes, completedSteps, sessionNotes, actionItems);
     saveCompletedSession(scorecard);
     setCompletedSession(scorecard);
     setExportNotice("Exercise ended. Scorecard saved in this browser.");
-    setTimerRunning(false);
+    setIsPaused(false);
   }
 
   return (
@@ -189,9 +213,12 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
               >
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-sm font-medium">{step.label}</span>
-                  <span className="text-xs">{step.duration}</span>
+                  <span className="text-xs">{completedSteps[step.title] ? "Complete" : step.duration}</span>
                 </div>
-                <p className="mt-1 text-sm">{step.title}</p>
+                <p className="mt-1 flex items-center gap-2 text-sm">
+                  {completedSteps[step.title] ? <CheckCircle2 className="size-4 text-primary" suppressHydrationWarning /> : null}
+                  {step.title}
+                </p>
               </button>
             ))}
           </CardContent>
@@ -204,8 +231,8 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
                 <div className="mb-2 flex flex-wrap items-center gap-2">
                   <Badge variant="secondary">{activeStep.label}</Badge>
                   <Badge variant="outline">
-                    <Timer className="mr-1 size-3" suppressHydrationWarning />
-                    {activeStep.duration}
+                    <Clock className="mr-1 size-3" suppressHydrationWarning />
+                    Suggested {activeStep.duration}
                   </Badge>
                   <Badge
                     variant={activeStep.pressure === "High" ? "secondary" : "outline"}
@@ -216,13 +243,31 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
                 </div>
                 <CardTitle>{activeStep.title}</CardTitle>
               </div>
-              <Button variant="outline" onClick={resetSession}>
-                <RefreshCw className="size-4" suppressHydrationWarning />
-                Reset
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <Button variant="outline" onClick={() => setIsPaused((current) => !current)}>
+                  {isPaused ? <Play className="size-4" suppressHydrationWarning /> : <Pause className="size-4" suppressHydrationWarning />}
+                  {isPaused ? "Resume" : "Pause"}
+                </Button>
+                <Button variant="outline" onClick={resetSession}>
+                  <RefreshCw className="size-4" suppressHydrationWarning />
+                  Reset
+                </Button>
+              </div>
             </div>
           </CardHeader>
           <CardContent className="space-y-6">
+            {isPaused ? (
+              <section className="rounded-md border border-accent/35 bg-accent/10 p-4">
+                <div className="mb-2 flex items-center gap-2 text-sm font-medium text-accent">
+                  <Pause className="size-4" suppressHydrationWarning />
+                  Exercise Paused
+                </div>
+                <p className="text-sm leading-6 text-muted-foreground">
+                  Use this break to answer comfort questions, clarify roles, or let the group catch up before continuing.
+                </p>
+              </section>
+            ) : null}
+
             <section className="rounded-md border border-primary/30 bg-primary/10 p-4">
               <div className="mb-2 flex items-center gap-2 text-sm font-medium text-primary">
                 <Sparkles className="size-4" suppressHydrationWarning />
@@ -231,17 +276,10 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
               <p className="leading-7 text-muted-foreground">{activeStep.facilitatorScript}</p>
             </section>
 
-            <section className="grid gap-3 rounded-md border border-border bg-background/55 p-4 sm:grid-cols-[1fr_auto] sm:items-center">
+            <section className="rounded-md border border-border bg-background/55 p-4">
               <div>
-                <div className="text-sm font-medium text-foreground">Stage Timer</div>
+                <div className="text-sm font-medium text-foreground">Suggested Time And Facilitation Cue</div>
                 <p className="mt-1 text-sm leading-6 text-muted-foreground">{activeStep.pressureNote}</p>
-              </div>
-              <div className="flex items-center gap-3 sm:justify-end">
-                <span className={`min-w-16 text-right text-2xl font-semibold tabular-nums ${timerTone}`}>{formatSeconds(remainingSeconds)}</span>
-                <Button variant="outline" size="sm" onClick={() => setTimerRunning((current) => !current)}>
-                  {timerRunning ? <Pause className="size-4" suppressHydrationWarning /> : <Play className="size-4" suppressHydrationWarning />}
-                  {timerRunning ? "Pause" : "Resume"}
-                </Button>
               </div>
             </section>
 
@@ -265,6 +303,34 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
 
             <PromptList title={hasHumanFacilitator ? "Ask The Room" : "Discuss This Now"} items={activeStep.prompts} />
 
+            <section className="grid gap-4 lg:grid-cols-[1fr_0.72fr]">
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Notes for this section</label>
+                <Textarea
+                  value={stepNotes[activeStep.title] ?? ""}
+                  onChange={(event) => updateStepNote(event.target.value)}
+                  placeholder="Capture the strongest answer, unclear ownership, and anything that should become an action item."
+                  className="min-h-[108px]"
+                />
+              </div>
+              <div className="space-y-3 rounded-md border border-border bg-background/45 p-4">
+                <div className="flex items-start gap-3">
+                  <Checkbox checked={completedSteps[activeStep.title] === true} onCheckedChange={(value) => toggleStepComplete(value === true)} />
+                  <div>
+                    <p className="text-sm font-medium">Discussion complete</p>
+                    <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                      Mark this when the group has named decisions, unknowns, and follow-up items for this section.
+                    </p>
+                  </div>
+                </div>
+                <Button variant="outline" className="w-full justify-start" onClick={() => setFacilitatorHint(buildStuckHint(activeStep, hasHumanFacilitator))}>
+                  <Lightbulb className="size-4" suppressHydrationWarning />
+                  The team is stuck
+                </Button>
+                {facilitatorHint ? <p className="rounded-md bg-muted p-3 text-sm leading-6 text-muted-foreground">{facilitatorHint}</p> : null}
+              </div>
+            </section>
+
             <Separator />
 
             <section className="space-y-4">
@@ -277,10 +343,15 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
                       : "Use this when the team is ready for the situation to evolve."}
                   </p>
                 </div>
-                <Button onClick={revealInject} disabled={activeStep.injects.every((inject) => revealedInjects.some((revealed) => revealed.id === inject.id))}>
-                  <Sparkles className="size-4" suppressHydrationWarning />
-                  {hasHumanFacilitator ? "Reveal Inject" : "Reveal Next Development"}
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button onClick={revealInject} disabled={availableInjects.length === 0}>
+                    <Sparkles className="size-4" suppressHydrationWarning />
+                    {hasHumanFacilitator ? "Reveal Inject" : "Reveal Next Development"}
+                  </Button>
+                  <Button variant="outline" onClick={skipInject} disabled={availableInjects.length === 0}>
+                    Skip Inject
+                  </Button>
+                </div>
               </div>
 
               <div className="space-y-2">
@@ -485,8 +556,20 @@ function DecisionList({
   );
 }
 
+function buildStuckHint(step: FacilitatorStep, hasHumanFacilitator: boolean) {
+  const firstDecision = step.decisions[0] ?? "the next decision";
+  const firstUnknown = step.unknowns[0] ?? "the most important unknown";
+  const voice = hasHumanFacilitator ? "Ask the room" : "Pause and discuss";
+
+  return `${voice}: "What do we know, what do we still need, and who is allowed to decide ${firstDecision.toLowerCase()}?" If the team still stalls, capture "${firstUnknown}" as an unresolved unknown and move to the next decision.`;
+}
+
 function Scorecard({ session }: { session: CompletedSession }) {
   const irpCoverage = session.categoryScores.find((category) => category.id === "irpCoverage");
+  const readinessTier = session.readinessTier ?? buildReadinessTier(session.overallScore);
+  const topRisks = session.topRisks ?? session.gaps.slice(0, 3);
+  const recommendedActionItems = session.recommendedActionItems ?? buildRecommendedActionItems(session.categoryScores, session.unresolvedUnknowns, session.actionItems);
+  const improvementPlan = session.improvementPlan ?? buildImprovementPlan(session.categoryScores, session.unresolvedUnknowns);
 
   return (
     <Card className="border-primary/30 bg-card/90">
@@ -502,7 +585,7 @@ function Scorecard({ session }: { session: CompletedSession }) {
             </p>
           </div>
           <div className="rounded-md border border-primary/35 bg-primary/10 px-4 py-3 text-center">
-            <p className="text-xs uppercase text-muted-foreground">Overall Readiness</p>
+            <p className="text-xs uppercase text-muted-foreground">{readinessTier}</p>
             <p className="text-3xl font-semibold text-primary">{session.overallScore}/100</p>
           </div>
         </div>
@@ -528,6 +611,39 @@ function Scorecard({ session }: { session: CompletedSession }) {
         </div>
 
         <BoardList title="Unresolved Unknowns" items={session.unresolvedUnknowns} />
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          <BoardList title="Top Risks" items={topRisks} />
+          <div className="rounded-md border border-border bg-background/45 p-4">
+            <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground">
+              <ListTodo className="size-4 text-primary" suppressHydrationWarning />
+              Suggested Action Items
+            </h3>
+            <ul className="space-y-2">
+              {recommendedActionItems.map((item, index) => (
+                <li key={`action-${index}-${item}`} className="text-sm leading-6 text-muted-foreground">
+                  {item}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+
+        <div className="rounded-md border border-border bg-background/45 p-4">
+          <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground">
+            <ShieldCheck className="size-4 text-primary" suppressHydrationWarning />
+            30 / 60 / 90 Day Improvement Plan
+          </h3>
+          <div className="grid gap-3 md:grid-cols-3">
+            {improvementPlan.map((item) => (
+              <div key={item.window} className="rounded-md border border-border bg-background/55 p-3">
+                <Badge variant="secondary">{item.window}</Badge>
+                <p className="mt-2 text-sm font-medium">{item.focus}</p>
+                <p className="mt-1 text-sm leading-6 text-muted-foreground">{item.outcome}</p>
+              </div>
+            ))}
+          </div>
+        </div>
 
         <div className="rounded-md border border-accent/35 bg-accent/10 p-4">
           <h3 className="text-sm font-semibold text-accent">Recommended Next Tabletop</h3>
@@ -920,17 +1036,6 @@ function nextSeed(seed: number) {
   return (Math.imul(seed, 1664525) + 1013904223) >>> 0;
 }
 
-function durationToSeconds(duration: string) {
-  const minutes = Number.parseInt(duration, 10);
-  return Number.isFinite(minutes) ? minutes * 60 : 300;
-}
-
-function formatSeconds(totalSeconds: number) {
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
-}
-
 function decisionKey(stepTitle: string, decision: string) {
   return `${stepTitle}:${decision}`;
 }
@@ -940,6 +1045,8 @@ function buildSessionSummary(
   revealedInjects: RevealedInject[],
   steps: FacilitatorStep[],
   decisionStatuses: Record<string, boolean>,
+  stepNotes: Record<string, string>,
+  completedSteps: Record<string, boolean>,
   sessionNotes: string,
   actionItems: string,
 ) {
@@ -963,9 +1070,15 @@ function buildSessionSummary(
   lines.push("### Decisions");
   steps.forEach((step) => {
     lines.push(`#### ${step.title}`);
+    lines.push(`- Discussion complete: ${completedSteps[step.title] ? "Yes" : "No"}`);
     step.decisions.forEach((decision) => {
       lines.push(`- [${decisionStatuses[decisionKey(step.title, decision)] ? "x" : " "}] ${decision}`);
     });
+    if (stepNotes[step.title]?.trim()) {
+      lines.push("");
+      lines.push("Section notes:");
+      lines.push(stepNotes[step.title].trim());
+    }
     lines.push("");
   });
 
@@ -984,6 +1097,8 @@ function buildCompletedSession(
   revealedInjects: RevealedInject[],
   steps: FacilitatorStep[],
   decisionStatuses: Record<string, boolean>,
+  stepNotes: Record<string, string>,
+  completedSteps: Record<string, boolean>,
   sessionNotes: string,
   actionItems: string,
 ): CompletedSession {
@@ -1001,9 +1116,14 @@ function buildCompletedSession(
   const overallScore = Math.round(scoredCategories.reduce((total, category) => total + (category.score ?? 0), 0) / Math.max(1, scoredCategories.length));
   const strengths = buildStrengths(categoryScores, decisions, revealedInjects, actionItems);
   const gaps = buildGaps(categoryScores, unresolvedUnknowns, decisions, actionItems);
+  const topRisks = buildTopRisks(categoryScores, unresolvedUnknowns, decisions);
+  const recommendedActionItems = buildRecommendedActionItems(categoryScores, unresolvedUnknowns, actionItems);
+  const improvementPlan = buildImprovementPlan(categoryScores, unresolvedUnknowns);
   const recommendedNextTabletop = buildRecommendedNextTabletop(exercise, categoryScores);
+  const readinessTier = buildReadinessTier(overallScore);
+  const completedStepTitles = steps.filter((step) => completedSteps[step.title]).map((step) => step.title);
   const aiContext = {
-    schemaVersion: "tabletopforge.session.v1" as const,
+    schemaVersion: "tabletopforge.session.v2" as const,
     exerciseId: exercise.id,
     organization: exercise.overview.organization,
     scenario: exercise.overview.scenario,
@@ -1019,6 +1139,12 @@ function buildCompletedSession(
     decisions,
     revealedInjects: completedInjects,
     unresolvedUnknowns,
+    completedSteps: completedStepTitles,
+    stepNotes,
+    readinessTier,
+    topRisks,
+    recommendedActionItems,
+    improvementPlan,
     sessionNotes,
     actionItems,
   };
@@ -1030,13 +1156,19 @@ function buildCompletedSession(
     organization: exercise.overview.organization,
     scenario: exercise.overview.scenario,
     overallScore,
+    readinessTier,
     categoryScores,
     strengths,
     gaps,
+    topRisks,
+    recommendedActionItems,
+    improvementPlan,
     unresolvedUnknowns,
     recommendedNextTabletop,
     decisions,
     revealedInjects: completedInjects,
+    completedSteps: completedStepTitles,
+    stepNotes,
     sessionNotes,
     actionItems,
     aiContext,
@@ -1189,6 +1321,86 @@ function buildGaps(categoryScores: SessionScoreCategory[], unresolvedUnknowns: s
   return gaps.length ? gaps.slice(0, 8) : ["No major gaps were flagged by the current scoring rules."];
 }
 
+function buildReadinessTier(score: number): CompletedSession["readinessTier"] {
+  if (score >= 90) {
+    return "Exercise Ready";
+  }
+
+  if (score >= 75) {
+    return "Strong";
+  }
+
+  if (score >= 55) {
+    return "Functional";
+  }
+
+  return "Developing";
+}
+
+function buildTopRisks(categoryScores: SessionScoreCategory[], unresolvedUnknowns: string[], decisions: CompletedSessionDecision[]) {
+  const risks = categoryScores
+    .filter((category) => category.score !== null && category.score < 70)
+    .sort((first, second) => (first.score ?? 0) - (second.score ?? 0))
+    .map((category) => `${category.label} may slow a real response because ${category.summary.toLowerCase()}`);
+
+  if (unresolvedUnknowns.length > 0) {
+    risks.push(`The team ended with unresolved unknowns that could delay response decisions: ${unresolvedUnknowns.slice(0, 2).join("; ")}.`);
+  }
+
+  const unresolvedDecisions = decisions.filter((decision) => !decision.decided);
+  if (unresolvedDecisions.length > 0) {
+    risks.push(`${unresolvedDecisions.length} decisions were not marked decided during the exercise.`);
+  }
+
+  return risks.length ? risks.slice(0, 3) : ["No major tabletop risks were flagged by the current scoring rules."];
+}
+
+function buildRecommendedActionItems(categoryScores: SessionScoreCategory[], unresolvedUnknowns: string[], actionItems: string) {
+  const items = categoryScores
+    .filter((category) => category.score !== null && category.score < 75)
+    .sort((first, second) => (first.score ?? 0) - (second.score ?? 0))
+    .slice(0, 4)
+    .map((category) => `Assign an owner to improve ${category.label.toLowerCase()} and document the expected decision path.`);
+
+  if (unresolvedUnknowns.length > 0) {
+    items.push("Convert unresolved unknowns into action items with owners, due dates, and validation steps.");
+  }
+
+  if (!actionItems.trim()) {
+    items.push("Create a tracked after-action list before closing the exercise.");
+  }
+
+  return uniqueStrings(items).slice(0, 5);
+}
+
+function buildImprovementPlan(categoryScores: SessionScoreCategory[], unresolvedUnknowns: string[]): CompletedSessionImprovementPlanItem[] {
+  const weakest = categoryScores
+    .filter((category) => category.score !== null)
+    .sort((first, second) => (first.score ?? 0) - (second.score ?? 0));
+
+  const first = weakest[0]?.label ?? "Incident response ownership";
+  const second = weakest[1]?.label ?? "communications and evidence handling";
+  const third = weakest[2]?.label ?? "recovery validation";
+
+  return [
+    {
+      window: "30 days",
+      focus: `Clarify ${first}`,
+      outcome: "Update owners, decision thresholds, and the first-response checklist.",
+    },
+    {
+      window: "60 days",
+      focus: `Practice ${second}`,
+      outcome: "Run a focused mini-drill and confirm the team can explain the process without guessing.",
+    },
+    {
+      window: "90 days",
+      focus: unresolvedUnknowns.length > 0 ? "Retest unresolved unknowns" : `Validate ${third}`,
+      outcome: "Rerun the scenario or a related tabletop and compare scorecard results.",
+    },
+  ];
+}
+
 function buildRecommendedNextTabletop(exercise: GeneratedExercise, categoryScores: SessionScoreCategory[]) {
   const weakest = categoryScores
     .filter((category) => category.score !== null)
@@ -1228,11 +1440,21 @@ function uniqueStrings(items: string[]) {
 
 function buildCompletedSessionMarkdown(exercise: GeneratedExercise, session: CompletedSession) {
   const lines = [
-    buildSessionSummary(exercise, session.revealedInjects.map((inject) => ({ ...inject, id: inject.text, fact: inject.text, unknown: "", stepTitle: inject.stepTitle })), buildFacilitatorSteps(exercise), Object.fromEntries(session.decisions.map((decision) => [decisionKey(decision.stepTitle, decision.decision), decision.decided])), session.sessionNotes, session.actionItems),
+    buildSessionSummary(
+      exercise,
+      session.revealedInjects.map((inject) => ({ ...inject, id: inject.text, fact: inject.text, unknown: "", stepTitle: inject.stepTitle })),
+      buildFacilitatorSteps(exercise),
+      Object.fromEntries(session.decisions.map((decision) => [decisionKey(decision.stepTitle, decision.decision), decision.decided])),
+      session.stepNotes,
+      Object.fromEntries(session.completedSteps.map((stepTitle) => [stepTitle, true])),
+      session.sessionNotes,
+      session.actionItems,
+    ),
     "",
     "## Exercise Scorecard",
     `- Completed: ${session.completedAt}`,
     `- Overall readiness: ${session.overallScore}/100`,
+    `- Readiness tier: ${session.readinessTier}`,
     "",
     "### Category Scores",
     ...session.categoryScores.map((category) => `- ${category.label}: ${category.score === null ? "N/A" : `${category.score}/100`} - ${category.summary}`),
@@ -1242,6 +1464,15 @@ function buildCompletedSessionMarkdown(exercise: GeneratedExercise, session: Com
     "",
     "### Gaps",
     ...session.gaps.map((gap) => `- ${gap}`),
+    "",
+    "### Top Risks",
+    ...session.topRisks.map((risk) => `- ${risk}`),
+    "",
+    "### Suggested Action Items",
+    ...session.recommendedActionItems.map((item) => `- ${item}`),
+    "",
+    "### 30 / 60 / 90 Day Improvement Plan",
+    ...session.improvementPlan.map((item) => `- ${item.window}: ${item.focus} - ${item.outcome}`),
     "",
     "### Unresolved Unknowns",
     ...session.unresolvedUnknowns.map((unknown) => `- ${unknown}`),

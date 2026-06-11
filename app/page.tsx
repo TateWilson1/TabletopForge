@@ -27,6 +27,13 @@ const features = [
   },
 ];
 
+const firstRunSteps = [
+  "Choose a preset or enter the organization details.",
+  "Upload or paste an IRP if one is available.",
+  "Run the exercise one section at a time.",
+  "End the exercise and download the scorecard.",
+];
+
 export default function HomePage() {
   return (
     <main>
@@ -55,6 +62,16 @@ export default function HomePage() {
             <Button asChild size="lg" variant="outline">
               <Link href="/saved">View Saved Exercises</Link>
             </Button>
+          </div>
+          <div className="grid gap-2 rounded-md border border-border bg-background/55 p-4 sm:grid-cols-2">
+            {firstRunSteps.map((step, index) => (
+              <div key={step} className="flex items-start gap-3">
+                <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-primary text-sm font-semibold text-primary-foreground">
+                  {index + 1}
+                </span>
+                <p className="text-sm leading-6 text-muted-foreground">{step}</p>
+              </div>
+            ))}
           </div>
         </div>
 

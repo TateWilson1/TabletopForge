@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { FileText, Wand2, X } from "lucide-react";
+import { ClipboardCheck, FileText, ShieldCheck, Wand2, X } from "lucide-react";
 import { ExerciseOutput } from "@/components/ExerciseOutput";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -40,6 +40,93 @@ const defaultOptions: ExerciseOptions = {
   irpText: "",
   irpFileName: "",
 };
+
+const exerciseTemplates: Array<{
+  title: string;
+  description: string;
+  options: Pick<ExerciseOptions, "industry" | "organizationSize" | "scenarioType" | "maturityLevel" | "exerciseDuration" | "includeExecutiveQuestions" | "includeTechnicalQuestions" | "includeComplianceQuestions" | "includeLessonsLearned" | "hasHumanFacilitator">;
+}> = [
+  {
+    title: "Small Business BEC",
+    description: "A quick, approachable wire transfer or credential theft scenario.",
+    options: {
+      industry: "Small Business",
+      organizationSize: "26-100",
+      scenarioType: "Phishing / Business Email Compromise",
+      maturityLevel: "Basic",
+      exerciseDuration: "60 minutes",
+      includeExecutiveQuestions: true,
+      includeTechnicalQuestions: false,
+      includeComplianceQuestions: true,
+      includeLessonsLearned: true,
+      hasHumanFacilitator: false,
+    },
+  },
+  {
+    title: "Healthcare Ransomware",
+    description: "Tests downtime, patient operations, leadership updates, and recovery decisions.",
+    options: {
+      industry: "Healthcare",
+      organizationSize: "101-500",
+      scenarioType: "Ransomware",
+      maturityLevel: "Intermediate",
+      exerciseDuration: "90 minutes",
+      includeExecutiveQuestions: true,
+      includeTechnicalQuestions: true,
+      includeComplianceQuestions: true,
+      includeLessonsLearned: true,
+      hasHumanFacilitator: false,
+    },
+  },
+  {
+    title: "School Data Breach",
+    description: "A student or staff data exposure scenario for education teams.",
+    options: {
+      industry: "Education",
+      organizationSize: "501-1000",
+      scenarioType: "Data Exfiltration",
+      maturityLevel: "Basic",
+      exerciseDuration: "60 minutes",
+      includeExecutiveQuestions: true,
+      includeTechnicalQuestions: false,
+      includeComplianceQuestions: true,
+      includeLessonsLearned: true,
+      hasHumanFacilitator: false,
+    },
+  },
+  {
+    title: "MSP Client Compromise",
+    description: "A third-party incident focused on client impact and shared responsibility.",
+    options: {
+      industry: "MSP / IT Provider",
+      organizationSize: "26-100",
+      scenarioType: "Vendor / Third-Party Breach",
+      maturityLevel: "Intermediate",
+      exerciseDuration: "90 minutes",
+      includeExecutiveQuestions: true,
+      includeTechnicalQuestions: true,
+      includeComplianceQuestions: true,
+      includeLessonsLearned: true,
+      hasHumanFacilitator: true,
+    },
+  },
+  {
+    title: "Lost Laptop / HIPAA",
+    description: "A low-friction privacy and evidence-handling exercise.",
+    options: {
+      industry: "Healthcare",
+      organizationSize: "26-100",
+      scenarioType: "Lost or Stolen Laptop",
+      maturityLevel: "Basic",
+      exerciseDuration: "30 minutes",
+      includeExecutiveQuestions: true,
+      includeTechnicalQuestions: false,
+      includeComplianceQuestions: true,
+      includeLessonsLearned: true,
+      hasHumanFacilitator: false,
+    },
+  },
+];
 
 export function ExerciseForm() {
   const router = useRouter();
@@ -79,6 +166,12 @@ export function ExerciseForm() {
     setIrpNotice("");
   }
 
+  function applyTemplate(template: (typeof exerciseTemplates)[number]) {
+    setOptions((current) => ({ ...current, ...template.options }));
+    setError("");
+    setSavedNotice(`${template.title} template applied. Adjust anything before generating.`);
+  }
+
   function handleGenerate() {
     if (!canGenerate) {
       setError("Enter an organization name with at least two characters.");
@@ -107,6 +200,31 @@ export function ExerciseForm() {
           </div>
         </CardHeader>
         <CardContent className="space-y-6">
+          <section className="space-y-3 rounded-lg border border-primary/25 bg-primary/10 p-4">
+            <div className="flex items-start gap-3">
+              <ClipboardCheck className="mt-1 size-5 text-primary" suppressHydrationWarning />
+              <div>
+                <h2 className="text-sm font-semibold">Start with a preset</h2>
+                <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                  Pick a common tabletop and adjust the details. This is the fastest path for new users.
+                </p>
+              </div>
+            </div>
+            <div className="grid gap-2">
+              {exerciseTemplates.map((template) => (
+                <button
+                  key={template.title}
+                  type="button"
+                  onClick={() => applyTemplate(template)}
+                  className="rounded-md border border-border bg-background/65 p-3 text-left transition hover:border-primary/50 hover:bg-background"
+                >
+                  <span className="text-sm font-medium">{template.title}</span>
+                  <span className="mt-1 block text-sm leading-6 text-muted-foreground">{template.description}</span>
+                </button>
+              ))}
+            </div>
+          </section>
+
           <div className="space-y-2">
             <Label htmlFor="organizationName">Organization name</Label>
             <Input
@@ -156,7 +274,7 @@ export function ExerciseForm() {
               <div>
                 <Label>Incident response plan</Label>
                 <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                  Upload a plain-text IRP or paste text from a PDF/Word document to tailor questions around likely gaps.
+                  Upload a plain-text IRP or paste text copied from a PDF or Word document to tailor questions around likely gaps.
                 </p>
               </div>
               {options.irpText ? (
@@ -165,6 +283,15 @@ export function ExerciseForm() {
                   Clear
                 </Button>
               ) : null}
+            </div>
+
+            <div className="rounded-md border border-primary/25 bg-primary/10 p-3">
+              <div className="flex items-start gap-2">
+                <ShieldCheck className="mt-0.5 size-4 text-primary" suppressHydrationWarning />
+                <p className="text-sm leading-6 text-muted-foreground">
+                  Privacy: IRP text stays in this browser in the current version. It is not sent to an AI service or server.
+                </p>
+              </div>
             </div>
 
             <div className="grid gap-3 sm:grid-cols-[0.72fr_1.28fr]">
