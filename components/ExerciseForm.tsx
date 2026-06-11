@@ -109,7 +109,9 @@ export function ExerciseForm() {
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="space-y-2">
-            <Label htmlFor="organizationName">Organization name</Label>
+            <Label htmlFor="organizationName">
+              Organization name <RequiredMark />
+            </Label>
             <Input
               id="organizationName"
               value={options.organizationName}
@@ -119,9 +121,10 @@ export function ExerciseForm() {
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2">
-            <SelectField label="Industry" value={options.industry} values={industries} onChange={(value) => updateOption("industry", value)} />
+            <SelectField label="Industry" required value={options.industry} values={industries} onChange={(value) => updateOption("industry", value)} />
             <SelectField
               label="Organization size"
+              required
               value={options.organizationSize}
               values={organizationSizes}
               onChange={(value) => updateOption("organizationSize", value)}
@@ -130,6 +133,7 @@ export function ExerciseForm() {
 
           <SelectField
             label="Scenario type"
+            required
             value={options.scenarioType}
             values={scenarioTypes}
             onChange={(value) => updateOption("scenarioType", value)}
@@ -149,12 +153,14 @@ export function ExerciseForm() {
           <div className="grid gap-4 sm:grid-cols-2">
             <SelectField
               label="Maturity level"
+              required
               value={options.maturityLevel}
               values={maturityLevels}
               onChange={(value) => updateOption("maturityLevel", value)}
             />
             <SelectField
               label="Exercise duration"
+              required
               value={options.exerciseDuration}
               values={exerciseDurations}
               onChange={(value) => updateOption("exerciseDuration", value)}
@@ -284,15 +290,19 @@ function SelectField<T extends string>({
   value,
   values,
   onChange,
+  required = false,
 }: {
   label: string;
   value: T;
   values: readonly T[];
   onChange: (value: T) => void;
+  required?: boolean;
 }) {
   return (
     <div className="space-y-2">
-      <Label>{label}</Label>
+      <Label>
+        {label} {required ? <RequiredMark /> : null}
+      </Label>
       <Select value={value} onValueChange={(nextValue) => onChange(nextValue as T)}>
         <SelectTrigger>
           <SelectValue />
@@ -306,6 +316,14 @@ function SelectField<T extends string>({
         </SelectContent>
       </Select>
     </div>
+  );
+}
+
+function RequiredMark() {
+  return (
+    <span className="text-destructive" aria-label="required">
+      *
+    </span>
   );
 }
 

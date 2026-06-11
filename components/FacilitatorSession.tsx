@@ -651,14 +651,18 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
   const focusGaps = exercise.irpAnalysis?.findings.filter((finding) => finding.status !== "found").slice(0, 3) ?? [];
   const gapPrompts = focusGaps.map((finding) => `The IRP scan flagged ${finding.label.toLowerCase()}. How would the team handle that gap during this incident?`);
   const hasHumanFacilitator = exercise.overview.hasHumanFacilitator;
+  const schedule = buildStepSchedule(exercise.overview.duration);
+  const pressureProfile = buildPressureProfile(exercise.overview.maturityLevel);
+  const maturityAdditions = buildMaturityAdditions(exercise.overview.maturityLevel);
+  const injectCount = buildInjectCount(exercise.overview.maturityLevel);
 
   return [
     {
       label: "Step 1",
       title: "Kickoff And Ground Rules",
-      duration: "5 min",
-      pressure: "Low",
-      pressureNote: "Use this stage to establish roles and scope before the scenario pressure starts.",
+      duration: schedule.kickoff,
+      pressure: pressureProfile.kickoff,
+      pressureNote: `${schedule.kickoff} suggested. Use this stage to establish roles and scope before the scenario pressure starts.`,
       facilitatorScript: hasHumanFacilitator
         ? `Start by reminding the group that this is a no-fault discussion for ${exercise.overview.organization}. The goal is to test decision-making, ownership, and the IRP, not to prove technical expertise.`
         : `Welcome to the ${exercise.overview.organization} tabletop exercise. This is a no-fault discussion. Your goal is to talk through decisions, ownership, communications, and IRP gaps. Assign one person to read responses aloud and one person to capture notes before moving on.`,
@@ -666,6 +670,7 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
         "Who is participating today, and what role are they representing?",
         "Who will capture decisions, unclear answers, and action items?",
         ...exercise.objectives.slice(0, 2),
+        ...maturityAdditions.kickoffPrompts,
       ],
       knownFacts: [
         `${exercise.overview.organization} is running a ${exercise.overview.duration} tabletop exercise.`,
@@ -681,20 +686,21 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
         "Who is the facilitator?",
         "Who owns note taking?",
         "What is in scope for today's discussion?",
+        ...maturityAdditions.kickoffDecisions,
       ],
       injects: buildInjects(exercise, "kickoff", [
         "A senior leader joins late and asks for a simple explanation of what the exercise is trying to prove.",
         "One participant says they have never seen the incident response plan before today.",
         "A department lead asks whether the exercise should include vendors and outside service providers.",
         "The note taker asks whether action items should be captured as risks, tasks, or both.",
-      ]),
+      ], injectCount),
     },
     {
       label: "Step 2",
       title: "Initial Report",
-      duration: "10 min",
-      pressure: "Medium",
-      pressureNote: "The team should triage quickly, but it still has room to ask clarifying questions.",
+      duration: schedule.initial,
+      pressure: pressureProfile.initial,
+      pressureNote: `${schedule.initial} suggested. The team should triage at a pace that matches the selected maturity level.`,
       facilitatorScript: hasHumanFacilitator
         ? `Read the scenario aloud, then ask the group to describe the first 15 minutes of response. Keep pulling the conversation back to who owns each action and where it is written down.`
         : `Read the scenario below as if it just happened. Discuss the first 15 minutes of response. Do not jump straight to technical fixes. Name who receives the report, who owns each action, and where the IRP supports that answer.`,
@@ -702,6 +708,7 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
       prompts: [
         ...exercise.discussionQuestions.slice(0, 4),
         ...gapPrompts.slice(0, 1),
+        ...maturityAdditions.initialPrompts,
       ],
       knownFacts: [
         "An initial report has been received and needs triage.",
@@ -713,21 +720,21 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
         "Whether the IRP threshold for declaring a formal incident has been met.",
         "Which evidence, messages, logs, or records must be preserved immediately.",
       ],
-      decisions: exercise.expectedDecisions.slice(0, 3),
+      decisions: [...exercise.expectedDecisions.slice(0, 3), ...maturityAdditions.initialDecisions],
       injects: buildInjects(exercise, "initial", [
         "A second employee reports a similar issue, suggesting this may not be isolated.",
         "The original reporter is unavailable for follow-up because they left for a meeting.",
         "Leadership asks whether this is officially an incident yet.",
         "The help desk receives a vague report from another team but does not have enough detail to classify it.",
         "A manager asks whether normal business activity should continue while the team investigates.",
-      ]),
+      ], injectCount),
     },
     {
       label: "Step 3",
       title: "Escalation And Containment",
-      duration: "15 min",
-      pressure: "High",
-      pressureNote: "Containment choices may create business impact, so decisions should become sharper here.",
+      duration: schedule.containment,
+      pressure: pressureProfile.containment,
+      pressureNote: `${schedule.containment} suggested. Containment choices may create business impact, so decisions should become sharper here.`,
       facilitatorScript: hasHumanFacilitator
         ? "Increase pressure slightly. Ask what the team can do immediately, what needs approval, and what business risk each containment choice creates."
         : "The situation is getting more serious. Before you reveal another development, decide what the team can do immediately, what requires approval, and what business risk each containment choice creates.",
@@ -735,6 +742,7 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
         ...exercise.discussionQuestions.slice(4, 8),
         ...exercise.gapDiscoveryQuestions.slice(0, 3),
         ...gapPrompts.slice(1, 2),
+        ...maturityAdditions.containmentPrompts,
       ],
       knownFacts: [
         "The incident is serious enough to consider containment actions.",
@@ -746,21 +754,21 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
         "Who can approve high-impact containment if the usual approver is unavailable.",
         "Whether evidence preservation must happen before containment or recovery actions.",
       ],
-      decisions: exercise.expectedDecisions.slice(2, 6),
+      decisions: [...exercise.expectedDecisions.slice(2, 6), ...maturityAdditions.containmentDecisions],
       injects: buildInjects(exercise, "containment", [
         "A department manager says the proposed containment step will interrupt a critical business process.",
         "The team cannot immediately reach the person who normally approves high-impact IT actions.",
         "Someone asks whether evidence should be preserved before containment begins.",
         "The IT lead says they can act quickly, but the business owner wants a written approval first.",
         "A responder finds partial evidence but is not sure whether it is enough to justify containment.",
-      ]),
+      ], injectCount),
     },
     {
       label: "Step 4",
       title: "Communications And Impact",
-      duration: "15 min",
-      pressure: "Critical",
-      pressureNote: "Pressure is highest here because leadership, legal, and stakeholder messaging can diverge quickly.",
+      duration: schedule.communications,
+      pressure: pressureProfile.communications,
+      pressureNote: `${schedule.communications} suggested. Pressure is highest here because leadership, legal, and stakeholder messaging can diverge quickly.`,
       facilitatorScript: hasHumanFacilitator
         ? "Shift to communication, leadership updates, legal/compliance involvement, and stakeholder expectations. Ask the group to avoid vague answers like 'we would notify people' and name the audience, owner, and message."
         : "Now focus on communications and impact. Avoid vague answers like 'we would notify people.' Name the audience, message owner, approval path, and what facts are confirmed before any update is sent.",
@@ -768,6 +776,7 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
         ...exercise.discussionQuestions.slice(8, 12),
         ...exercise.gapDiscoveryQuestions.slice(3, 7),
         ...gapPrompts.slice(2, 3),
+        ...maturityAdditions.communicationsPrompts,
       ],
       knownFacts: [
         "Leadership and business stakeholders may need a status update.",
@@ -783,6 +792,7 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
         "Whether leadership needs an immediate briefing.",
         "Whether legal, compliance, or cyber insurance should be involved.",
         "Whether employees, customers, vendors, or regulators need communication.",
+        ...maturityAdditions.communicationsDecisions,
       ],
       injects: buildInjects(exercise, "communications", [
         "An executive asks for a status update they can forward to leadership within 10 minutes.",
@@ -790,14 +800,14 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
         "Legal asks what facts are confirmed versus assumed.",
         "A department head wants to send their own message before the official update is ready.",
         "A vendor asks whether they should prepare a statement for their support team.",
-      ]),
+      ], injectCount),
     },
     {
       label: "Step 5",
       title: "Recovery And Lessons Learned",
-      duration: "15 min",
+      duration: schedule.recovery,
       pressure: "Recovery",
-      pressureNote: "Shift from urgent response to ownership, follow-through, and proof that gaps will be fixed.",
+      pressureNote: `${schedule.recovery} suggested. Shift from urgent response to ownership, follow-through, and proof that gaps will be fixed.`,
       facilitatorScript: hasHumanFacilitator
         ? "Close by turning gaps into improvements. Every unclear answer should become an action item with an owner, due date, and priority."
         : "Close the exercise by turning every unclear answer into an improvement item. Do not leave this section until each major gap has an owner, due date, and priority.",
@@ -806,6 +816,7 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
         "What slowed the response in this discussion?",
         "What would need to be updated in the IRP before this scenario happened for real?",
         "What training or tabletop should happen next?",
+        ...maturityAdditions.recoveryPrompts,
       ],
       knownFacts: [
         "The exercise has surfaced decisions, unclear answers, and potential IRP gaps.",
@@ -821,6 +832,7 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
         "Which action items are high priority?",
         "Who owns each IRP update?",
         "When will the team validate that improvements were completed?",
+        ...maturityAdditions.recoveryDecisions,
       ],
       injects: buildInjects(exercise, "recovery", [
         "The facilitator asks each participant to name one thing they would change in the IRP.",
@@ -828,9 +840,145 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
         "A participant says the team should rerun this exercise after updates are complete.",
         "The team realizes one action item depends on another department that was not represented.",
         "Someone asks how leadership will know whether the fixes actually worked.",
-      ]),
+      ], injectCount),
     },
   ];
+}
+
+type StepSchedule = Record<InjectStage, string>;
+
+function buildStepSchedule(duration: GeneratedExercise["overview"]["duration"]): StepSchedule {
+  const schedules: Record<GeneratedExercise["overview"]["duration"], StepSchedule> = {
+    "30 minutes": {
+      kickoff: "3 min",
+      initial: "7 min",
+      containment: "8 min",
+      communications: "7 min",
+      recovery: "5 min",
+    },
+    "60 minutes": {
+      kickoff: "5 min",
+      initial: "10 min",
+      containment: "15 min",
+      communications: "15 min",
+      recovery: "15 min",
+    },
+    "90 minutes": {
+      kickoff: "10 min",
+      initial: "15 min",
+      containment: "25 min",
+      communications: "20 min",
+      recovery: "20 min",
+    },
+    "2 hours": {
+      kickoff: "10 min",
+      initial: "20 min",
+      containment: "30 min",
+      communications: "30 min",
+      recovery: "30 min",
+    },
+  };
+
+  return schedules[duration];
+}
+
+function buildPressureProfile(maturity: GeneratedExercise["overview"]["maturityLevel"]): Record<InjectStage, FacilitatorStep["pressure"]> {
+  if (maturity === "Basic") {
+    return {
+      kickoff: "Low",
+      initial: "Low",
+      containment: "Medium",
+      communications: "High",
+      recovery: "Recovery",
+    };
+  }
+
+  if (maturity === "Advanced") {
+    return {
+      kickoff: "Medium",
+      initial: "High",
+      containment: "Critical",
+      communications: "Critical",
+      recovery: "Recovery",
+    };
+  }
+
+  return {
+    kickoff: "Low",
+    initial: "Medium",
+    containment: "High",
+    communications: "Critical",
+    recovery: "Recovery",
+  };
+}
+
+function buildInjectCount(maturity: GeneratedExercise["overview"]["maturityLevel"]) {
+  if (maturity === "Basic") {
+    return 2;
+  }
+
+  if (maturity === "Advanced") {
+    return 4;
+  }
+
+  return 3;
+}
+
+function buildMaturityAdditions(maturity: GeneratedExercise["overview"]["maturityLevel"]) {
+  if (maturity === "Basic") {
+    return {
+      kickoffPrompts: ["What would make this exercise feel successful and practical for the team?"],
+      initialPrompts: ["What is the simplest first step the team can agree on?"],
+      containmentPrompts: ["What action can reduce risk without creating unnecessary disruption?"],
+      communicationsPrompts: ["Who needs a plain-language update first?"],
+      recoveryPrompts: ["What one improvement should be fixed first after the exercise?"],
+      kickoffDecisions: [],
+      initialDecisions: [],
+      containmentDecisions: [],
+      communicationsDecisions: [],
+      recoveryDecisions: [],
+    };
+  }
+
+  if (maturity === "Advanced") {
+    return {
+      kickoffPrompts: ["What assumptions should be challenged during this exercise instead of accepted at face value?"],
+      initialPrompts: [
+        "What evidence would move this from suspected incident to confirmed incident?",
+        "What decision would change if the affected data or system belonged to a regulated business process?",
+      ],
+      containmentPrompts: [
+        "What containment option preserves the most evidence while reducing the most risk?",
+        "What business process has to be protected if the technical response becomes disruptive?",
+      ],
+      communicationsPrompts: [
+        "What facts must be confirmed before leadership, legal, customers, vendors, or regulators receive an update?",
+        "What message changes if this becomes public before the organization is ready?",
+      ],
+      recoveryPrompts: [
+        "How will the team prove the fix worked instead of only documenting that a fix was assigned?",
+        "What metric, artifact, or retest would show readiness improved after this tabletop?",
+      ],
+      kickoffDecisions: ["Which assumptions are in scope to challenge during the exercise?"],
+      initialDecisions: ["What evidence threshold confirms incident severity?"],
+      containmentDecisions: ["Which containment option balances business impact, risk reduction, and evidence preservation?"],
+      communicationsDecisions: ["What facts must be approved before external messaging?"],
+      recoveryDecisions: ["How will improvement completion be validated and retested?"],
+    };
+  }
+
+  return {
+    kickoffPrompts: [],
+    initialPrompts: ["What would cause the team to escalate this beyond normal IT handling?"],
+    containmentPrompts: ["What approval path is needed if containment affects business operations?"],
+    communicationsPrompts: ["What update should leadership receive if facts are still incomplete?"],
+    recoveryPrompts: ["Which action items need owners before the team leaves the room?"],
+    kickoffDecisions: [],
+    initialDecisions: [],
+    containmentDecisions: [],
+    communicationsDecisions: [],
+    recoveryDecisions: [],
+  };
 }
 
 type InjectStage = "kickoff" | "initial" | "containment" | "communications" | "recovery";

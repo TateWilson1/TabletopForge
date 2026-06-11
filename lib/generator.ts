@@ -37,6 +37,7 @@ export function generateExercise(options: ExerciseOptions): GeneratedExercise {
   const tailoredIrpQuestions = getTailoredIrpQuestions(irpAnalysis);
   const participants = [...baseParticipants];
   const id = crypto.randomUUID();
+  const questionLimit = getQuestionLimit(options);
 
   if (options.industry === "MSP / IT Provider" || options.scenarioType === "Vendor / Third-Party Breach") {
     participants.push("Vendor/MSP Contact");
@@ -50,6 +51,7 @@ export function generateExercise(options: ExerciseOptions): GeneratedExercise {
       ...(options.includeTechnicalQuestions ? content.technicalQuestions : []),
     ],
     `${id}:discussion:${options.scenarioType}`,
+    questionLimit,
   );
 
   const gapDiscoveryQuestions = buildQuestionSet(
@@ -59,6 +61,7 @@ export function generateExercise(options: ExerciseOptions): GeneratedExercise {
       ...(options.includeComplianceQuestions ? content.complianceQuestions : []),
     ],
     `${id}:gaps:${options.scenarioType}`,
+    questionLimit,
   );
 
   const generatedAt = new Date().toISOString();
@@ -108,8 +111,24 @@ export function generateExercise(options: ExerciseOptions): GeneratedExercise {
   };
 }
 
-function buildQuestionSet(questions: string[], seed: string) {
-  return seededShuffle(Array.from(new Set(questions)), seed).slice(0, 12);
+function buildQuestionSet(questions: string[], seed: string, limit: number) {
+  return seededShuffle(Array.from(new Set(questions)), seed).slice(0, limit);
+}
+
+function getQuestionLimit(options: ExerciseOptions) {
+  const durationBase: Record<ExerciseOptions["exerciseDuration"], number> = {
+    "30 minutes": 8,
+    "60 minutes": 10,
+    "90 minutes": 12,
+    "2 hours": 14,
+  };
+  const maturityAdjustment: Record<ExerciseOptions["maturityLevel"], number> = {
+    Basic: -1,
+    Intermediate: 0,
+    Advanced: 2,
+  };
+
+  return Math.max(6, Math.min(16, durationBase[options.exerciseDuration] + maturityAdjustment[options.maturityLevel]));
 }
 
 function tuneByMaturity(objectives: string[], maturityLevel: ExerciseOptions["maturityLevel"]) {
