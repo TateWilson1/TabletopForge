@@ -73,7 +73,6 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
   const [completedSession, setCompletedSession] = useState<CompletedSession | null>(null);
   const [isPaused, setIsPaused] = useState(false);
   const [completedSteps, setCompletedSteps] = useState<Record<string, boolean>>({});
-  const [stepNotes, setStepNotes] = useState<Record<string, string>>({});
   const [skippedInjectIds, setSkippedInjectIds] = useState<string[]>([]);
   const [facilitatorHint, setFacilitatorHint] = useState("");
 
@@ -134,7 +133,6 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
     setRevealedInjects([]);
     setDecisionStatuses({});
     setCompletedSteps({});
-    setStepNotes({});
     setSkippedInjectIds([]);
     setFacilitatorHint("");
     setCustomInject("");
@@ -153,24 +151,11 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
     setCompletedSteps((current) => ({ ...current, [activeStep.title]: checked }));
   }
 
-  function updateStepNote(value: string) {
-    setStepNotes((current) => ({ ...current, [activeStep.title]: value }));
-  }
-
   async function copySessionSummary() {
     await navigator.clipboard.writeText(
-      completedSession?.markdownReport ?? buildSessionSummary(exercise, revealedInjects, steps, decisionStatuses, stepNotes, completedSteps, sessionNotes, actionItems),
+      completedSession?.markdownReport ?? buildSessionSummary(exercise, revealedInjects, steps, decisionStatuses, {}, completedSteps, sessionNotes, actionItems),
     );
     setExportNotice(completedSession ? "Scorecard summary copied." : "Session summary copied.");
-  }
-
-  function downloadSessionSummary() {
-    downloadTextFile(
-      completedSession?.markdownReport ?? buildSessionSummary(exercise, revealedInjects, steps, decisionStatuses, stepNotes, completedSteps, sessionNotes, actionItems),
-      `${safeFilename(exercise.overview.organization)}-session-summary.md`,
-      "text/markdown;charset=utf-8",
-    );
-    setExportNotice(completedSession ? "Scorecard Markdown downloaded." : "Session Markdown downloaded.");
   }
 
   function downloadReadableSummary() {
@@ -184,7 +169,7 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
       return;
     }
 
-    const draftSession = buildCompletedSession(exercise, revealedInjects, steps, decisionStatuses, stepNotes, completedSteps, sessionNotes, actionItems);
+    const draftSession = buildCompletedSession(exercise, revealedInjects, steps, decisionStatuses, {}, completedSteps, sessionNotes, actionItems);
     downloadTextFile(
       buildCompletedSessionHtmlReport(draftSession),
       `${safeFilename(exercise.overview.organization)}-session-report.html`,
@@ -193,29 +178,8 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
     setExportNotice("Readable session report downloaded.");
   }
 
-  function downloadAiContext() {
-    const context = completedSession?.aiContext ?? buildCompletedSession(exercise, revealedInjects, steps, decisionStatuses, stepNotes, completedSteps, sessionNotes, actionItems).aiContext;
-    downloadTextFile(JSON.stringify(context, null, 2), `${safeFilename(exercise.overview.organization)}-ai-context.json`, "application/json;charset=utf-8");
-    setExportNotice("AI-ready session context downloaded.");
-  }
-
-  function draftActionItems() {
-    const draft = buildRecommendedActionItems(
-      buildCategoryScores(exercise, steps, steps.flatMap((step) => step.decisions.map((decision) => ({
-        stepTitle: step.title,
-        decision,
-        decided: decisionStatuses[decisionKey(step.title, decision)] === true,
-      }))), revealedInjects, sessionNotes, actionItems),
-      buildUnresolvedUnknowns(steps, revealedInjects, decisionStatuses),
-      actionItems,
-    );
-    const formatted = draft.map((item) => `${item} | Owner TBD | Due date TBD | Priority TBD`).join("\n");
-    setActionItems((current) => [current.trim(), formatted].filter(Boolean).join("\n"));
-    setExportNotice("Draft action items added from the current session state.");
-  }
-
   function endExercise() {
-    const scorecard = buildCompletedSession(exercise, revealedInjects, steps, decisionStatuses, stepNotes, completedSteps, sessionNotes, actionItems);
+    const scorecard = buildCompletedSession(exercise, revealedInjects, steps, decisionStatuses, {}, completedSteps, sessionNotes, actionItems);
     saveCompletedSession(scorecard);
     setCompletedSession(scorecard);
     setExportNotice("Exercise ended. Scorecard saved in this browser.");
@@ -338,32 +302,21 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
 
             <PromptList title={hasHumanFacilitator ? "Ask The Room" : "Discuss This Now"} items={activeStep.prompts} />
 
-            <section className="grid gap-4 lg:grid-cols-[1fr_0.72fr]">
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Notes for this section</label>
-                <Textarea
-                  value={stepNotes[activeStep.title] ?? ""}
-                  onChange={(event) => updateStepNote(event.target.value)}
-                  placeholder="Capture the strongest answer, unclear ownership, and anything that should become an action item."
-                  className="min-h-[108px]"
-                />
-              </div>
-              <div className="space-y-3 rounded-md border border-border bg-background/45 p-4">
+            <section className="space-y-3 rounded-md border border-border bg-background/45 p-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="flex items-start gap-3">
-                  <Checkbox checked={completedSteps[activeStep.title] === true} onCheckedChange={(value) => toggleStepComplete(value === true)} />
+                  <Checkbox checked={completedSteps[activeStep.title] === true} onCheckedChange={(value) => toggleStepComplete(value === true)} className="mt-1" />
                   <div>
-                    <p className="text-sm font-medium">Discussion complete</p>
-                    <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                      Mark this when the group has named decisions, unknowns, and follow-up items for this section.
-                    </p>
+                    <p className="text-sm font-medium">Mark this section complete</p>
+                    <p className="mt-1 text-sm leading-6 text-muted-foreground">Use this after the group has discussed the prompts and key decisions.</p>
                   </div>
                 </div>
-                <Button variant="outline" className="w-full justify-start" onClick={() => setFacilitatorHint(buildStuckHint(activeStep, hasHumanFacilitator))}>
+                <Button variant="outline" onClick={() => setFacilitatorHint(buildStuckHint(activeStep, hasHumanFacilitator))}>
                   <Lightbulb className="size-4" suppressHydrationWarning />
                   The team is stuck
                 </Button>
-                {facilitatorHint ? <p className="rounded-md bg-muted p-3 text-sm leading-6 text-muted-foreground">{facilitatorHint}</p> : null}
               </div>
+              {facilitatorHint ? <p className="rounded-md bg-muted p-3 text-sm leading-6 text-muted-foreground">{facilitatorHint}</p> : null}
             </section>
 
             <Separator />
@@ -460,17 +413,9 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
                 <Clipboard className="size-4" suppressHydrationWarning />
                 Copy Summary
               </Button>
-              <Button variant="outline" onClick={downloadSessionSummary}>
-                <Download className="size-4" suppressHydrationWarning />
-                Download Markdown
-              </Button>
               <Button variant="outline" onClick={downloadReadableSummary}>
                 <Download className="size-4" suppressHydrationWarning />
                 Download Report
-              </Button>
-              <Button variant="outline" onClick={downloadAiContext}>
-                <Download className="size-4" suppressHydrationWarning />
-                AI Context
               </Button>
             </div>
           </div>
@@ -490,13 +435,7 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
             />
           </div>
           <div className="space-y-2">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <label className="text-sm font-medium">Action items</label>
-              <Button variant="outline" size="sm" onClick={draftActionItems}>
-                <ListTodo className="size-4" suppressHydrationWarning />
-                Draft Actions
-              </Button>
-            </div>
+            <label className="text-sm font-medium">Action items</label>
             <Textarea
               value={actionItems}
               onChange={(event) => setActionItems(event.target.value)}

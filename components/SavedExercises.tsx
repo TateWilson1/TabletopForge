@@ -44,11 +44,6 @@ export function SavedExercises() {
     setCompleted(getCompletedSessions());
   }
 
-  async function handleCopyCompleted(session: CompletedSession) {
-    await navigator.clipboard.writeText(session.markdownReport);
-    setCompletedNotice(`${session.organization} scorecard copied.`);
-  }
-
   function handleDownloadCompleted(session: CompletedSession) {
     downloadTextFile(buildCompletedSessionHtmlReport(session), `${safeFilename(session.organization)}-scorecard-report.html`, "text/html;charset=utf-8");
     setCompletedNotice(`${session.organization} readable scorecard downloaded.`);
@@ -157,10 +152,6 @@ export function SavedExercises() {
                     ) : null}
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    <Button variant="secondary" onClick={() => handleCopyCompleted(session)}>
-                      <Eye className="size-4" suppressHydrationWarning />
-                      Copy Markdown
-                    </Button>
                     <Button variant="outline" onClick={() => handleDownloadCompleted(session)}>
                       Download Report
                     </Button>

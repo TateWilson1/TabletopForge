@@ -2,13 +2,12 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Clipboard, Download, FileText, Play, Save } from "lucide-react";
+import { Download, FileText, Play, Save } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Textarea } from "@/components/ui/textarea";
 import { buildExerciseHtmlReport, downloadTextFile, safeFilename } from "@/lib/report-export";
 import { saveExercise } from "@/lib/storage";
 import type { GeneratedExercise } from "@/lib/types";
@@ -34,23 +33,6 @@ export function ExerciseOutput({
         </CardContent>
       </Card>
     );
-  }
-
-  async function handleCopy() {
-    if (!exercise) {
-      return;
-    }
-
-    await navigator.clipboard.writeText(exercise.markdownReport);
-    setCopyNotice("Markdown copied to clipboard.");
-  }
-
-  function handleDownload() {
-    if (!exercise) {
-      return;
-    }
-
-    downloadTextFile(exercise.markdownReport, `${safeFilename(exercise.overview.organization)}-tabletop.md`, "text/markdown;charset=utf-8");
   }
 
   function handleDownloadReadable() {
@@ -85,14 +67,6 @@ export function ExerciseOutput({
             </CardDescription>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button variant="outline" onClick={handleCopy}>
-              <Clipboard className="size-4" suppressHydrationWarning />
-              Copy Markdown
-            </Button>
-            <Button variant="outline" onClick={handleDownload}>
-              <Download className="size-4" suppressHydrationWarning />
-              Download Markdown
-            </Button>
             <Button variant="outline" onClick={handleDownloadReadable}>
               <Download className="size-4" suppressHydrationWarning />
               Download Report
@@ -116,7 +90,6 @@ export function ExerciseOutput({
           <TabsList className="flex h-auto flex-wrap justify-start">
             <TabsTrigger value="report">Report</TabsTrigger>
             <TabsTrigger value="questions">Questions</TabsTrigger>
-            <TabsTrigger value="markdown">Markdown</TabsTrigger>
           </TabsList>
 
           <TabsContent value="report" className="space-y-6">
@@ -176,10 +149,6 @@ export function ExerciseOutput({
           <TabsContent value="questions" className="grid gap-6 xl:grid-cols-2">
             <ListSection title="Discussion Questions" items={exercise.discussionQuestions} />
             <ListSection title="IRP Gap Discovery Questions" items={exercise.gapDiscoveryQuestions} />
-          </TabsContent>
-
-          <TabsContent value="markdown">
-            <Textarea readOnly value={exercise.markdownReport} className="min-h-[620px] font-mono text-xs leading-5" />
           </TabsContent>
         </Tabs>
       </CardContent>
