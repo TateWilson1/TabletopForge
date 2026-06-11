@@ -91,7 +91,7 @@ export function ExerciseOutput({
               Save
             </Button>
             <Button asChild>
-              <Link href={`/session/${exercise.id}`}>
+              <Link href={`/session?id=${encodeURIComponent(exercise.id)}`}>
                 <Play className="size-4" suppressHydrationWarning />
                 Start Session
               </Link>

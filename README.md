@@ -36,6 +36,17 @@ npm run dev
 
 Open `http://localhost:3000`.
 
+## Use Without Installing Developer Tools
+
+Most users should not run the project with `npm`. Publish the app as a hosted website or package the static build into a desktop release.
+
+- Hosted website: run `npm run build:static` during deployment and publish the generated `out/` folder.
+- Windows app: package the generated `out/` folder with a desktop wrapper such as Tauri or Electron and attach the installer to a GitHub Release.
+
+The app currently stores exercises and scorecards in the user's browser storage, so a hosted static website works without a database or backend.
+
+See `docs/DISTRIBUTION.md` for the GitHub Pages and desktop release path, including an example GitHub Actions workflow.
+
 ## Build And Lint
 
 ```bash

@@ -10,11 +10,17 @@ import { Card, CardContent } from "@/components/ui/card";
 import { getSavedExerciseById } from "@/lib/storage";
 import type { GeneratedExercise } from "@/lib/types";
 
-export function SessionRunner({ exerciseId }: { exerciseId: string }) {
+export function SessionRunner({ exerciseId }: { exerciseId: string | null }) {
   const [exercise, setExercise] = useState<GeneratedExercise | null>(null);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
+    if (!exerciseId) {
+      setExercise(null);
+      setLoaded(true);
+      return;
+    }
+
     setExercise(getSavedExerciseById(exerciseId) ?? null);
     setLoaded(true);
   }, [exerciseId]);

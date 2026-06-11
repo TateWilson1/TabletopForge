@@ -89,7 +89,7 @@ export function ExerciseForm() {
     setExercise(generated);
     saveExercise(generated);
     setSavedNotice("Exercise generated and saved in this browser.");
-    router.push(`/session/${generated.id}`);
+    router.push(`/session?id=${encodeURIComponent(generated.id)}`);
   }
 
   return (
