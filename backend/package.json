@@ -1,0 +1,19 @@
+{
+  "name": "tabletopforge-backend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "check": "node --check src/server.js",
+    "build": "npm run check",
+    "test": "npm run check"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "openai": "^6.42.0"
+  }
+}
