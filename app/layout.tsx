@@ -15,6 +15,8 @@ const navItems = [
   { href: "/", label: "Home" },
   { href: "/generate", label: "Generate" },
   { href: "/saved", label: "Saved" },
+  { href: "/pricing", label: "Pricing" },
+  { href: "/account", label: "Account" },
   { href: "/about", label: "About" },
   { href: "/privacy", label: "Privacy" },
 ];
@@ -32,7 +34,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
                 </span>
                 <span>TabletopForge</span>
               </Link>
-              <nav className="flex items-center gap-1">
+              <nav className="flex flex-wrap items-center justify-end gap-1">
                 {navItems.map((item) => (
                   <Link
                     key={item.href}

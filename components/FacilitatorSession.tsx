@@ -25,6 +25,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { getStoredSessionToken } from "@/lib/account";
 import { buildCompletedSessionHtmlReport, downloadTextFile, safeFilename } from "@/lib/report-export";
 import { saveCompletedSession } from "@/lib/storage";
 import type {
@@ -94,6 +95,7 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
   const [promptIndexes, setPromptIndexes] = useState<Record<string, number>>({});
   const [aiInjectsEnabled, setAiInjectsEnabled] = useState(false);
   const [aiAccessCode, setAiAccessCode] = useState("");
+  const [hasSessionToken, setHasSessionToken] = useState(false);
   const [aiInjectNotice, setAiInjectNotice] = useState("");
   const diceIntervalRef = useRef<number | null>(null);
   const diceTimeoutRef = useRef<number | null>(null);
@@ -118,7 +120,7 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
   );
   const activePromptIndex = Math.min(promptIndexes[activeStep.title] ?? 0, Math.max(0, activeStep.prompts.length - 1));
   const activePrompt = activeStep.prompts[activePromptIndex] ?? "";
-  const canUseAiInjects = aiInjectsEnabled && TABLETOPFORGE_API_URL.length > 0 && aiAccessCode.trim().length > 0;
+  const canUseAiInjects = aiInjectsEnabled && TABLETOPFORGE_API_URL.length > 0 && (hasSessionToken || aiAccessCode.trim().length > 0);
 
   const clearDiceTimers = useCallback(() => {
     if (diceIntervalRef.current !== null) {
@@ -144,6 +146,7 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
   useEffect(() => {
     setAiInjectsEnabled(window.localStorage.getItem(AI_ENABLED_STORAGE_KEY) === "true");
     setAiAccessCode(window.localStorage.getItem(AI_ACCESS_CODE_STORAGE_KEY) ?? "");
+    setHasSessionToken(Boolean(getStoredSessionToken()));
   }, []);
 
   useEffect(() => {
@@ -478,7 +481,11 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
                     <Checkbox checked={aiInjectsEnabled} onCheckedChange={(value) => updateAiInjectsEnabled(value === true)} className="mt-1" />
                     <span>
                       <span className="block font-medium text-foreground">Use AI injects</span>
-                      <span>{TABLETOPFORGE_API_URL ? "Falls back automatically if AI is unavailable." : "Backend URL is not configured for this build."}</span>
+                      <span>
+                        {TABLETOPFORGE_API_URL
+                          ? "Uses your signed-in account or access code, and falls back automatically if AI is unavailable."
+                          : "Backend URL is not configured for this build."}
+                      </span>
                     </span>
                   </label>
                   <Input
@@ -490,8 +497,8 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
                   />
                 </div>
                 {aiInjectNotice ? <p className="text-sm leading-6 text-muted-foreground">{aiInjectNotice}</p> : null}
-                {!aiInjectNotice && aiInjectsEnabled && !aiAccessCode.trim() ? (
-                  <p className="text-sm leading-6 text-muted-foreground">Enter the access code to try AI-generated injects.</p>
+                {!aiInjectNotice && aiInjectsEnabled && !hasSessionToken && !aiAccessCode.trim() ? (
+                  <p className="text-sm leading-6 text-muted-foreground">Sign in or enter the access code to try AI-generated injects.</p>
                 ) : null}
               </div>
             </section>
@@ -793,12 +800,21 @@ async function requestAiInject({
   sessionNotes: string;
   aiAccessCode: string;
 }): Promise<AiInjectResponse["inject"]> {
+  const sessionToken = getStoredSessionToken();
+  const headers = new Headers();
+  headers.set("Content-Type", "application/json");
+
+  if (sessionToken) {
+    headers.set("Authorization", `Bearer ${sessionToken}`);
+  }
+
+  if (aiAccessCode.trim()) {
+    headers.set("x-tabletopforge-ai-access-code", aiAccessCode.trim());
+  }
+
   const response = await fetch(`${TABLETOPFORGE_API_URL}/api/ai/generate-inject`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-tabletopforge-ai-access-code": aiAccessCode.trim(),
-    },
+    headers,
     body: JSON.stringify({
       exercise: {
         organization: exercise.overview.organization,

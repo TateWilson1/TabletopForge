@@ -6,10 +6,25 @@ This is a separate Node/Express backend for Azure App Service. The frontend can 
 
 ```txt
 GET  /health
+POST /api/auth/request-code
+POST /api/auth/verify-code
+POST /api/auth/logout
+GET  /api/me
+POST /api/tabletops/consume-generation
+POST /api/billing/create-checkout-session
+POST /api/billing/stripe-webhook
 POST /api/ai/generate-inject
 ```
 
-`POST /api/ai/generate-inject` requires the access code in either:
+Account endpoints require `DATABASE_URL`. The generation entitlement endpoint consumes one free generation, one purchased generation credit, or allows generation for an active subscription.
+
+`POST /api/ai/generate-inject` accepts either a signed-in account session:
+
+```txt
+Authorization: Bearer your-session-token
+```
+
+or the legacy access code in either:
 
 ```txt
 x-tabletopforge-ai-access-code: your-code
@@ -30,20 +45,49 @@ Using the header is preferred so the access code is not mixed into the AI prompt
 Create `backend/.env` locally or add these as Azure App Service application settings:
 
 ```env
+DATABASE_URL="postgresql://tabletopadmin:YOUR_PASSWORD@tabletopforgedatabase.postgres.database.azure.com:5432/tabletopforge?sslmode=require"
+TABLETOPFORGE_AUTH_SECRET="use-a-long-random-secret"
+TABLETOPFORGE_AUTH_DELIVERY_MODE="screen"
+TABLETOPFORGE_AUTO_MIGRATE="true"
 OPENAI_API_KEY="sk-proj-YOUR_OPENAI_KEY"
 OPENAI_MODEL="gpt-5-mini"
 TABLETOPFORGE_AI_ACCESS_CODE="change-this-before-public-use"
 TABLETOPFORGE_AI_DAILY_LIMIT="50"
 TABLETOPFORGE_ALLOWED_ORIGINS="https://tatewilson1.github.io,http://localhost:3000,http://localhost:3001"
+PUBLIC_APP_URL="https://tatewilson1.github.io/TabletopForge"
+STRIPE_SECRET_KEY="sk_test_YOUR_STRIPE_KEY"
+STRIPE_PRICE_TABLETOP="price_YOUR_ONE_TIME_TABLETOP_PRICE"
+STRIPE_PRICE_SUBSCRIPTION="price_YOUR_SUBSCRIPTION_PRICE"
+STRIPE_WEBHOOK_SECRET="whsec_YOUR_WEBHOOK_SECRET"
 PORT="3000"
 ```
 
 Notes:
 
+- `DATABASE_URL` is required for accounts, free-generation limits, and billing state.
+- `TABLETOPFORGE_AUTH_SECRET` should be a long random value and should stay server-only.
+- `TABLETOPFORGE_AUTH_DELIVERY_MODE="screen"` shows login codes in the browser for setup/testing. Before a public paid launch, switch this to a real email or auth provider flow.
+- `TABLETOPFORGE_AUTO_MIGRATE` lets the backend create the SaaS account/billing support tables on startup. Keep Prisma migrations as the source of truth; this is a deployment safety net.
 - `OPENAI_API_KEY` must stay server-only.
 - `OPENAI_MODEL` defaults to `gpt-5-mini` if omitted.
 - `TABLETOPFORGE_AI_DAILY_LIMIT` is enforced in memory per running server instance.
 - `TABLETOPFORGE_ALLOWED_ORIGINS` should include your GitHub Pages origin, not the full path. Use `https://tatewilson1.github.io`, not `https://tatewilson1.github.io/TabletopForge`.
+- Stripe variables are optional until you want real paid checkout. Without them, the checkout endpoint returns a clear configuration error.
+
+## Database Migration
+
+After pulling these changes, apply the Prisma migrations from the repo root:
+
+```powershell
+npm install
+npx prisma migrate deploy
+```
+
+For local development against a disposable database, use:
+
+```powershell
+npx prisma migrate dev
+```
 
 ## Local Testing
 
@@ -59,6 +103,20 @@ Health check:
 
 ```powershell
 Invoke-RestMethod -Uri "http://localhost:3000/health"
+```
+
+Request a login code:
+
+```powershell
+$body = @{ email = "you@example.com" } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri "http://localhost:3000/api/auth/request-code" -ContentType "application/json" -Body $body
+```
+
+Verify the code and copy the returned token:
+
+```powershell
+$body = @{ email = "you@example.com"; code = "123456" } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri "http://localhost:3000/api/auth/verify-code" -ContentType "application/json" -Body $body
 ```
 
 Generate an inject:
@@ -108,11 +166,20 @@ npm start
 4. Add application settings in Azure:
 
 ```txt
+DATABASE_URL
+TABLETOPFORGE_AUTH_SECRET
+TABLETOPFORGE_AUTH_DELIVERY_MODE
+TABLETOPFORGE_AUTO_MIGRATE
 OPENAI_API_KEY
 OPENAI_MODEL
 TABLETOPFORGE_AI_ACCESS_CODE
 TABLETOPFORGE_AI_DAILY_LIMIT
 TABLETOPFORGE_ALLOWED_ORIGINS
+PUBLIC_APP_URL
+STRIPE_SECRET_KEY
+STRIPE_PRICE_TABLETOP
+STRIPE_PRICE_SUBSCRIPTION
+STRIPE_WEBHOOK_SECRET
 ```
 
 5. Confirm:
@@ -139,7 +206,9 @@ For GitHub Pages, `.github/workflows/deploy-pages.yml` sets this during the stat
 
 AI injects are optional in the session UI. If the OpenAI account has no credits, the backend is unavailable, or the access code is wrong, the frontend falls back to the built-in scenario twists so the exercise can keep running.
 
-The access code is a lightweight server gate, not a full user login system. It prevents casual public usage of the AI endpoint, but anyone you give the code to can make requests until you rotate it or lower the daily limit.
+For the paid-product flow, the frontend signs users in through the backend and calls `/api/tabletops/consume-generation` before it starts a new tabletop. The frontend sends metadata such as organization, industry, scenario, maturity, and whether an IRP was present, but it does not send or store raw uploaded IRP contents.
+
+The access code is now mainly a testing fallback. The production direction is account sessions plus Stripe-backed entitlements.
 
 ## GitHub Actions Publish Profile Deployment
 
@@ -161,11 +230,19 @@ The Azure App Service application settings still need:
 
 ```txt
 DATABASE_URL
+TABLETOPFORGE_AUTH_SECRET
+TABLETOPFORGE_AUTH_DELIVERY_MODE
+TABLETOPFORGE_AUTO_MIGRATE
 OPENAI_API_KEY
 OPENAI_MODEL
 TABLETOPFORGE_AI_ACCESS_CODE
 TABLETOPFORGE_AI_DAILY_LIMIT
 TABLETOPFORGE_ALLOWED_ORIGINS
+PUBLIC_APP_URL
+STRIPE_SECRET_KEY
+STRIPE_PRICE_TABLETOP
+STRIPE_PRICE_SUBSCRIPTION
+STRIPE_WEBHOOK_SECRET
 ```
 
 This GitHub Actions workflow avoids relying on Azure Deployment Center's GitHub source-control token setup and does not require `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, or `AZURE_SUBSCRIPTION_ID`.

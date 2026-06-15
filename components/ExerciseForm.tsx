@@ -12,6 +12,8 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
+import { AccountPanel } from "@/components/AccountPanel";
+import { consumeGeneration, isAccountApiConfigured, type AccountState } from "@/lib/account";
 import { generateExercise } from "@/lib/generator";
 import { saveExercise } from "@/lib/storage";
 import {
@@ -47,8 +49,10 @@ export function ExerciseForm() {
   const [savedNotice, setSavedNotice] = useState("");
   const [irpNotice, setIrpNotice] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
+  const [account, setAccount] = useState<AccountState | null>(null);
 
   const canGenerate = useMemo(() => options.organizationName.trim().length >= 2, [options.organizationName]);
+  const accountApiConfigured = isAccountApiConfigured();
 
   function updateOption<K extends keyof ExerciseOptions>(key: K, value: ExerciseOptions[K]) {
     setOptions((current) => ({ ...current, [key]: value }));
@@ -78,16 +82,37 @@ export function ExerciseForm() {
     setIrpNotice("");
   }
 
-  function handleGenerate() {
+  async function handleGenerate() {
     if (!canGenerate) {
       setError("Enter an organization name with at least two characters.");
       return;
     }
 
-    const generated = generateExercise({ ...options, hasHumanFacilitator: false });
+    if (accountApiConfigured && !account) {
+      setError("Sign in first so TabletopForge can apply your free generation or paid credits.");
+      return;
+    }
+
+    setIsGenerating(true);
+    setError("");
+
+    let tabletopId = "";
+    if (accountApiConfigured) {
+      try {
+        const entitlement = await consumeGeneration(options);
+        tabletopId = entitlement.tabletopId;
+        setAccount({ user: entitlement.user, entitlements: entitlement.entitlements });
+      } catch (requestError) {
+        setIsGenerating(false);
+        setError(requestError instanceof Error ? requestError.message : "Could not start generation.");
+        return;
+      }
+    }
+
+    const generatedExercise = generateExercise({ ...options, hasHumanFacilitator: false });
+    const generated = tabletopId ? { ...generatedExercise, id: tabletopId } : generatedExercise;
     saveExercise(generated);
     setSavedNotice("Exercise generated and saved in this browser.");
-    setIsGenerating(true);
     router.push(`/session?id=${encodeURIComponent(generated.id)}`);
   }
 
@@ -106,6 +131,8 @@ export function ExerciseForm() {
           </div>
         </CardHeader>
         <CardContent className="space-y-6">
+          <AccountPanel compact onAccountChange={setAccount} />
+
           <div className="space-y-2">
             <Label htmlFor="organizationName">
               Organization name <RequiredMark />

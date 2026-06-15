@@ -3,6 +3,10 @@ import crypto from "node:crypto";
 import cors from "cors";
 import express from "express";
 import OpenAI from "openai";
+import pg from "pg";
+import Stripe from "stripe";
+
+const { Pool } = pg;
 
 const DEFAULT_MODEL = "gpt-5-mini";
 const DEFAULT_ALLOWED_ORIGINS = [
@@ -10,16 +14,40 @@ const DEFAULT_ALLOWED_ORIGINS = [
   "http://localhost:3000",
   "http://localhost:3001",
 ];
+const ACTIVE_SUBSCRIPTION_STATUSES = new Set(["active", "trialing"]);
+const SESSION_DAYS = 30;
+const LOGIN_CODE_MINUTES = 15;
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
+const pool = process.env.DATABASE_URL
+  ? new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: process.env.DATABASE_URL.includes("sslmode=require") ? { rejectUnauthorized: false } : undefined,
+      connectionTimeoutMillis: 5000,
+    })
+  : null;
+
 const dailyUsage = {
   day: getCurrentDay(),
   count: 0,
 };
 
-app.use(express.json({ limit: "64kb" }));
+app.post("/api/billing/stripe-webhook", express.raw({ type: "application/json" }), async (request, response) => {
+  try {
+    const event = buildStripeEvent(request);
+    await recordBillingEvent(event);
+    await handleStripeEvent(event);
+    response.json({ received: true });
+  } catch (error) {
+    console.error("Stripe webhook failed", error);
+    response.status(400).json({ error: "Stripe webhook failed." });
+  }
+});
+
+app.use(express.json({ limit: "96kb" }));
 app.use(
   cors({
     origin(origin, callback) {
@@ -30,6 +58,7 @@ app.use(
 
       callback(new Error("Origin is not allowed by CORS."));
     },
+    allowedHeaders: ["Content-Type", "Authorization", "x-tabletopforge-ai-access-code"],
   }),
 );
 
@@ -37,18 +66,170 @@ app.get("/health", (_request, response) => {
   response.json({
     ok: true,
     service: "tabletopforge-backend",
+    databaseConfigured: Boolean(pool),
+    stripeConfigured: Boolean(stripe),
+    authDeliveryMode: getAuthDeliveryMode(),
   });
 });
 
+app.post("/api/auth/request-code", async (request, response) => {
+  try {
+    requireDatabase();
+    const email = normalizeEmail(request.body?.email);
+    if (!email) {
+      response.status(400).json({ error: "Enter a valid email address." });
+      return;
+    }
+
+    const user = await ensureUser(email);
+    const code = crypto.randomInt(100000, 1000000).toString();
+    const expiresAt = new Date(Date.now() + LOGIN_CODE_MINUTES * 60 * 1000);
+
+    await dbQuery(
+      `INSERT INTO "login_codes" ("id", "email", "userId", "codeHash", "expiresAt")
+       VALUES ($1, $2, $3, $4, $5)`,
+      [crypto.randomUUID(), email, user.id, hashSecret(`${email}:${code}`), expiresAt],
+    );
+
+    const deliveryMode = getAuthDeliveryMode();
+    response.json({
+      ok: true,
+      deliveryMode,
+      expiresAt: expiresAt.toISOString(),
+      loginCode: deliveryMode === "screen" ? code : undefined,
+      message:
+        deliveryMode === "screen"
+          ? "Temporary setup mode is showing the login code on screen."
+          : "If this email exists, a login code will be sent.",
+    });
+  } catch (error) {
+    sendApiError(response, error, "Could not start sign in.");
+  }
+});
+
+app.post("/api/auth/verify-code", async (request, response) => {
+  try {
+    requireDatabase();
+    const email = normalizeEmail(request.body?.email);
+    const code = typeof request.body?.code === "string" ? request.body.code.trim() : "";
+
+    if (!email || !code) {
+      response.status(400).json({ error: "Email and code are required." });
+      return;
+    }
+
+    const loginCode = await findUsableLoginCode(email);
+    if (!loginCode || loginCode.codeHash !== hashSecret(`${email}:${code}`)) {
+      response.status(401).json({ error: "Invalid or expired login code." });
+      return;
+    }
+
+    const user = await ensureUser(email);
+    await dbQuery(`UPDATE "login_codes" SET "usedAt" = NOW() WHERE "id" = $1`, [loginCode.id]);
+
+    const session = await createSession(user.id);
+    response.json({
+      token: session.token,
+      expiresAt: session.expiresAt.toISOString(),
+      user: publicUser(await getUserById(user.id)),
+    });
+  } catch (error) {
+    sendApiError(response, error, "Could not verify sign in.");
+  }
+});
+
+app.post("/api/auth/logout", async (request, response) => {
+  try {
+    const token = getBearerToken(request);
+    if (token && pool) {
+      await dbQuery(`UPDATE "auth_sessions" SET "revokedAt" = NOW() WHERE "tokenHash" = $1`, [hashSecret(token)]);
+    }
+
+    response.json({ ok: true });
+  } catch (error) {
+    sendApiError(response, error, "Could not sign out.");
+  }
+});
+
+app.get("/api/me", async (request, response) => {
+  try {
+    const session = await authenticateRequest(request);
+    response.json({ user: publicUser(session.user), entitlements: buildEntitlements(session.user) });
+  } catch (error) {
+    sendAuthError(response, error);
+  }
+});
+
+app.post("/api/tabletops/consume-generation", async (request, response) => {
+  try {
+    const session = await authenticateRequest(request);
+    const title = asLimitedString(request.body?.title || request.body?.organization || "Untitled tabletop", 160);
+    const tabletop = await consumeGenerationEntitlement(session.user.id, {
+      title,
+      generationSource: "local",
+    });
+    const user = await getUserById(session.user.id);
+
+    response.json({
+      tabletopId: tabletop.id,
+      user: publicUser(user),
+      entitlements: buildEntitlements(user),
+    });
+  } catch (error) {
+    if (error.statusCode === 402) {
+      response.status(402).json({ error: error.message, code: "PAYMENT_REQUIRED" });
+      return;
+    }
+
+    sendAuthError(response, error);
+  }
+});
+
+app.post("/api/billing/create-checkout-session", async (request, response) => {
+  try {
+    const session = await authenticateRequest(request);
+    if (!stripe) {
+      response.status(503).json({ error: "Stripe is not configured yet." });
+      return;
+    }
+
+    const purchaseType = request.body?.purchaseType === "subscription" ? "subscription" : "tabletop";
+    const priceId = purchaseType === "subscription" ? process.env.STRIPE_PRICE_SUBSCRIPTION : process.env.STRIPE_PRICE_TABLETOP;
+    if (!priceId) {
+      response.status(503).json({ error: `Missing Stripe price for ${purchaseType}.` });
+      return;
+    }
+
+    const customerId = await getOrCreateStripeCustomer(session.user);
+    const appUrl = getPublicAppUrl(request);
+    const checkoutSession = await stripe.checkout.sessions.create({
+      mode: purchaseType === "subscription" ? "subscription" : "payment",
+      customer: customerId,
+      line_items: [{ price: priceId, quantity: 1 }],
+      success_url: `${appUrl}/account?checkout=success`,
+      cancel_url: `${appUrl}/account?checkout=cancelled`,
+      metadata: {
+        userId: session.user.id,
+        purchaseType,
+      },
+    });
+
+    response.json({ url: checkoutSession.url });
+  } catch (error) {
+    sendAuthError(response, error);
+  }
+});
+
 app.post("/api/ai/generate-inject", async (request, response) => {
-  const configError = validateServerConfig();
+  const configError = validateAiConfig();
   if (configError) {
     response.status(503).json({ error: configError });
     return;
   }
 
-  if (!isValidAccessCode(getRequestAccessCode(request))) {
-    response.status(401).json({ error: "Invalid access code." });
+  const authContext = await authenticateAiRequest(request);
+  if (!authContext.ok) {
+    response.status(authContext.statusCode).json({ error: authContext.error });
     return;
   }
 
@@ -106,6 +287,8 @@ app.use((_request, response) => {
   response.status(404).json({ error: "Not found." });
 });
 
+await ensureSaasSchema();
+
 app.listen(port, () => {
   console.log(`TabletopForge backend listening on port ${port}`);
 });
@@ -115,40 +298,425 @@ const injectSchema = {
   additionalProperties: false,
   required: ["injectTitle", "injectText", "pressureLevel", "followUpQuestion", "expectedDecision"],
   properties: {
-    injectTitle: {
-      type: "string",
-      description: "A short title for the scenario development.",
-    },
-    injectText: {
-      type: "string",
-      description: "One new realistic event to reveal to the tabletop participants.",
-    },
+    injectTitle: { type: "string", description: "A short title for the scenario development." },
+    injectText: { type: "string", description: "One new realistic event to reveal to the tabletop participants." },
     pressureLevel: {
       type: "string",
       enum: ["low", "medium", "high", "critical"],
       description: "How much pressure the inject should add.",
     },
-    followUpQuestion: {
-      type: "string",
-      description: "The next question the website should ask the participants.",
-    },
-    expectedDecision: {
-      type: "string",
-      description: "The decision the group should try to make after the inject.",
-    },
+    followUpQuestion: { type: "string", description: "The next question the website should ask the participants." },
+    expectedDecision: { type: "string", description: "The decision the group should try to make after the inject." },
   },
 };
 
-function validateServerConfig() {
-  if (!process.env.OPENAI_API_KEY) {
-    return "OPENAI_API_KEY is not configured.";
+async function authenticateAiRequest(request) {
+  const bearerToken = getBearerToken(request);
+  if (bearerToken) {
+    try {
+      const session = await authenticateRequest(request);
+      return { ok: true, user: session.user };
+    } catch {
+      return { ok: false, statusCode: 401, error: "Invalid session." };
+    }
   }
 
-  if (!process.env.TABLETOPFORGE_AI_ACCESS_CODE) {
-    return "TABLETOPFORGE_AI_ACCESS_CODE is not configured.";
+  if (isValidAccessCode(getRequestAccessCode(request))) {
+    return { ok: true, user: null };
   }
 
-  return "";
+  return { ok: false, statusCode: 401, error: "Sign in or provide a valid access code." };
+}
+
+async function authenticateRequest(request) {
+  requireDatabase();
+  const token = getBearerToken(request);
+  if (!token) {
+    const error = new Error("Sign in is required.");
+    error.statusCode = 401;
+    throw error;
+  }
+
+  const result = await dbQuery(
+    `SELECT
+       u."id", u."email", u."createdAt", u."updatedAt", u."freeGenerationsRemaining",
+       u."generationCredits", u."billingPlan", u."subscriptionStatus", u."stripeCustomerId"
+     FROM "auth_sessions" s
+     INNER JOIN "users" u ON u."id" = s."userId"
+     WHERE s."tokenHash" = $1 AND s."revokedAt" IS NULL AND s."expiresAt" > NOW()
+     LIMIT 1`,
+    [hashSecret(token)],
+  );
+
+  if (result.rowCount === 0) {
+    const error = new Error("Session expired. Sign in again.");
+    error.statusCode = 401;
+    throw error;
+  }
+
+  return { user: result.rows[0] };
+}
+
+async function consumeGenerationEntitlement(userId, { title, generationSource }) {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+    const userResult = await client.query(
+      `SELECT "id", "freeGenerationsRemaining", "generationCredits", "subscriptionStatus"
+       FROM "users"
+       WHERE "id" = $1
+       FOR UPDATE`,
+      [userId],
+    );
+
+    if (userResult.rowCount === 0) {
+      throw Object.assign(new Error("User not found."), { statusCode: 404 });
+    }
+
+    const user = userResult.rows[0];
+    const hasSubscription = ACTIVE_SUBSCRIPTION_STATUSES.has(user.subscriptionStatus);
+    const hasPurchasedCredit = user.generationCredits > 0;
+    const hasFreeCredit = user.freeGenerationsRemaining > 0;
+
+    if (!hasSubscription && !hasPurchasedCredit && !hasFreeCredit) {
+      throw Object.assign(new Error("You have used your free tabletop. Buy one tabletop or start a subscription to generate more."), {
+        statusCode: 402,
+      });
+    }
+
+    if (!hasSubscription && hasPurchasedCredit) {
+      await client.query(
+        `UPDATE "users" SET "generationCredits" = "generationCredits" - 1, "updatedAt" = NOW() WHERE "id" = $1`,
+        [userId],
+      );
+    } else if (!hasSubscription && hasFreeCredit) {
+      await client.query(
+        `UPDATE "users" SET "freeGenerationsRemaining" = "freeGenerationsRemaining" - 1, "updatedAt" = NOW() WHERE "id" = $1`,
+        [userId],
+      );
+    }
+
+    const tabletopId = crypto.randomUUID();
+    await client.query(
+      `INSERT INTO "tabletops" ("id", "userId", "title", "status", "generationSource", "updatedAt")
+       VALUES ($1, $2, $3, 'generated', $4, NOW())`,
+      [tabletopId, userId, title || "Untitled tabletop", generationSource],
+    );
+
+    await client.query("COMMIT");
+    return { id: tabletopId };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function ensureUser(email) {
+  const existing = await dbQuery(
+    `SELECT
+       "id", "email", "createdAt", "updatedAt", "freeGenerationsRemaining",
+       "generationCredits", "billingPlan", "subscriptionStatus", "stripeCustomerId"
+     FROM "users"
+     WHERE "email" = $1
+     LIMIT 1`,
+    [email],
+  );
+
+  if (existing.rowCount > 0) {
+    return existing.rows[0];
+  }
+
+  const inserted = await dbQuery(
+    `INSERT INTO "users" ("id", "email", "updatedAt")
+     VALUES ($1, $2, NOW())
+     RETURNING "id", "email", "createdAt", "updatedAt", "freeGenerationsRemaining",
+       "generationCredits", "billingPlan", "subscriptionStatus", "stripeCustomerId"`,
+    [crypto.randomUUID(), email],
+  );
+
+  return inserted.rows[0];
+}
+
+async function getUserById(userId) {
+  const result = await dbQuery(
+    `SELECT
+       "id", "email", "createdAt", "updatedAt", "freeGenerationsRemaining",
+       "generationCredits", "billingPlan", "subscriptionStatus", "stripeCustomerId"
+     FROM "users"
+     WHERE "id" = $1
+     LIMIT 1`,
+    [userId],
+  );
+
+  if (result.rowCount === 0) {
+    throw Object.assign(new Error("User not found."), { statusCode: 404 });
+  }
+
+  return result.rows[0];
+}
+
+async function findUsableLoginCode(email) {
+  const result = await dbQuery(
+    `SELECT "id", "email", "userId", "codeHash", "expiresAt"
+     FROM "login_codes"
+     WHERE "email" = $1 AND "usedAt" IS NULL AND "expiresAt" > NOW()
+     ORDER BY "createdAt" DESC
+     LIMIT 1`,
+    [email],
+  );
+
+  return result.rows[0] ?? null;
+}
+
+async function createSession(userId) {
+  const token = `ttf_${crypto.randomBytes(32).toString("base64url")}`;
+  const expiresAt = new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000);
+
+  await dbQuery(
+    `INSERT INTO "auth_sessions" ("id", "userId", "tokenHash", "expiresAt")
+     VALUES ($1, $2, $3, $4)`,
+    [crypto.randomUUID(), userId, hashSecret(token), expiresAt],
+  );
+
+  return { token, expiresAt };
+}
+
+async function getOrCreateStripeCustomer(user) {
+  if (user.stripeCustomerId) {
+    return user.stripeCustomerId;
+  }
+
+  const customer = await stripe.customers.create({
+    email: user.email,
+    metadata: { userId: user.id },
+  });
+
+  await dbQuery(`UPDATE "users" SET "stripeCustomerId" = $1, "updatedAt" = NOW() WHERE "id" = $2`, [
+    customer.id,
+    user.id,
+  ]);
+
+  return customer.id;
+}
+
+function buildStripeEvent(request) {
+  if (!stripe) {
+    throw new Error("Stripe is not configured.");
+  }
+
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+  if (!webhookSecret) {
+    return JSON.parse(request.body.toString("utf8"));
+  }
+
+  return stripe.webhooks.constructEvent(request.body, request.get("stripe-signature"), webhookSecret);
+}
+
+async function handleStripeEvent(event) {
+  if (!pool) {
+    return;
+  }
+
+  if (event.type === "checkout.session.completed") {
+    const session = event.data.object;
+    const userId = session.metadata?.userId;
+    const purchaseType = session.metadata?.purchaseType;
+    if (!userId) {
+      return;
+    }
+
+    if (purchaseType === "subscription") {
+      await dbQuery(
+        `UPDATE "users"
+         SET "billingPlan" = 'subscription', "subscriptionStatus" = 'active', "stripeCustomerId" = COALESCE("stripeCustomerId", $2), "updatedAt" = NOW()
+         WHERE "id" = $1`,
+        [userId, session.customer],
+      );
+      return;
+    }
+
+    await dbQuery(
+      `UPDATE "users"
+       SET "generationCredits" = "generationCredits" + 1, "stripeCustomerId" = COALESCE("stripeCustomerId", $2), "updatedAt" = NOW()
+       WHERE "id" = $1`,
+      [userId, session.customer],
+    );
+  }
+
+  if (event.type?.startsWith("customer.subscription.")) {
+    const subscription = event.data.object;
+    await dbQuery(
+      `UPDATE "users"
+       SET "billingPlan" = CASE WHEN $2 = ANY($3::text[]) THEN 'subscription' ELSE 'free' END,
+           "subscriptionStatus" = $2,
+           "updatedAt" = NOW()
+       WHERE "stripeCustomerId" = $1`,
+      [subscription.customer, subscription.status, Array.from(ACTIVE_SUBSCRIPTION_STATUSES)],
+    );
+  }
+}
+
+async function recordBillingEvent(event) {
+  if (!pool) {
+    return;
+  }
+
+  const userId = event.data?.object?.metadata?.userId || null;
+  await dbQuery(
+    `INSERT INTO "billing_events" ("id", "userId", "stripeEventId", "eventType", "payloadJson")
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT ("stripeEventId") DO NOTHING`,
+    [crypto.randomUUID(), userId, event.id || null, event.type || "unknown", event],
+  );
+}
+
+function publicUser(user) {
+  return {
+    id: user.id,
+    email: user.email,
+    freeGenerationsRemaining: Number(user.freeGenerationsRemaining ?? 0),
+    generationCredits: Number(user.generationCredits ?? 0),
+    billingPlan: user.billingPlan ?? "free",
+    subscriptionStatus: user.subscriptionStatus ?? "none",
+    createdAt: user.createdAt,
+  };
+}
+
+function buildEntitlements(user) {
+  const freeGenerationsRemaining = Number(user.freeGenerationsRemaining ?? 0);
+  const generationCredits = Number(user.generationCredits ?? 0);
+  const subscriptionStatus = user.subscriptionStatus ?? "none";
+  const hasActiveSubscription = ACTIVE_SUBSCRIPTION_STATUSES.has(subscriptionStatus);
+
+  return {
+    canGenerate: hasActiveSubscription || generationCredits > 0 || freeGenerationsRemaining > 0,
+    freeGenerationsRemaining,
+    generationCredits,
+    subscriptionStatus,
+    billingPlan: user.billingPlan ?? "free",
+  };
+}
+
+async function dbQuery(sql, params = []) {
+  requireDatabase();
+  return pool.query(sql, params);
+}
+
+async function ensureSaasSchema() {
+  if (!pool || process.env.TABLETOPFORGE_AUTO_MIGRATE === "false") {
+    return;
+  }
+
+  const statements = [
+    `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "billingPlan" TEXT NOT NULL DEFAULT 'free'`,
+    `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "freeGenerationsRemaining" INTEGER NOT NULL DEFAULT 1`,
+    `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "generationCredits" INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "stripeCustomerId" TEXT`,
+    `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "subscriptionStatus" TEXT NOT NULL DEFAULT 'none'`,
+    `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP`,
+    `ALTER TABLE "tabletops" ADD COLUMN IF NOT EXISTS "generationSource" TEXT NOT NULL DEFAULT 'local'`,
+    `ALTER TABLE "ai_runs" ADD COLUMN IF NOT EXISTS "userId" UUID`,
+    `CREATE TABLE IF NOT EXISTS "auth_sessions" (
+      "id" UUID NOT NULL,
+      "userId" UUID NOT NULL,
+      "tokenHash" TEXT NOT NULL,
+      "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "expiresAt" TIMESTAMP(3) NOT NULL,
+      "revokedAt" TIMESTAMP(3),
+      CONSTRAINT "auth_sessions_pkey" PRIMARY KEY ("id")
+    )`,
+    `CREATE TABLE IF NOT EXISTS "login_codes" (
+      "id" UUID NOT NULL,
+      "email" TEXT NOT NULL,
+      "userId" UUID,
+      "codeHash" TEXT NOT NULL,
+      "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "expiresAt" TIMESTAMP(3) NOT NULL,
+      "usedAt" TIMESTAMP(3),
+      CONSTRAINT "login_codes_pkey" PRIMARY KEY ("id")
+    )`,
+    `CREATE TABLE IF NOT EXISTS "billing_events" (
+      "id" UUID NOT NULL,
+      "userId" UUID,
+      "stripeEventId" TEXT,
+      "eventType" TEXT NOT NULL,
+      "payloadJson" JSONB,
+      "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "billing_events_pkey" PRIMARY KEY ("id")
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "users_stripeCustomerId_key" ON "users"("stripeCustomerId")`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "auth_sessions_tokenHash_key" ON "auth_sessions"("tokenHash")`,
+    `CREATE INDEX IF NOT EXISTS "auth_sessions_userId_idx" ON "auth_sessions"("userId")`,
+    `CREATE INDEX IF NOT EXISTS "auth_sessions_expiresAt_idx" ON "auth_sessions"("expiresAt")`,
+    `CREATE INDEX IF NOT EXISTS "auth_sessions_revokedAt_idx" ON "auth_sessions"("revokedAt")`,
+    `CREATE INDEX IF NOT EXISTS "login_codes_email_idx" ON "login_codes"("email")`,
+    `CREATE INDEX IF NOT EXISTS "login_codes_userId_idx" ON "login_codes"("userId")`,
+    `CREATE INDEX IF NOT EXISTS "login_codes_expiresAt_idx" ON "login_codes"("expiresAt")`,
+    `CREATE INDEX IF NOT EXISTS "login_codes_usedAt_idx" ON "login_codes"("usedAt")`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "billing_events_stripeEventId_key" ON "billing_events"("stripeEventId")`,
+    `CREATE INDEX IF NOT EXISTS "billing_events_userId_idx" ON "billing_events"("userId")`,
+    `CREATE INDEX IF NOT EXISTS "billing_events_eventType_idx" ON "billing_events"("eventType")`,
+    `CREATE INDEX IF NOT EXISTS "ai_runs_userId_idx" ON "ai_runs"("userId")`,
+    `DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'auth_sessions_userId_fkey') THEN
+        ALTER TABLE "auth_sessions" ADD CONSTRAINT "auth_sessions_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+      END IF;
+    END $$`,
+    `DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'login_codes_userId_fkey') THEN
+        ALTER TABLE "login_codes" ADD CONSTRAINT "login_codes_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+      END IF;
+    END $$`,
+    `DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ai_runs_userId_fkey') THEN
+        ALTER TABLE "ai_runs" ADD CONSTRAINT "ai_runs_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+      END IF;
+    END $$`,
+    `DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'billing_events_userId_fkey') THEN
+        ALTER TABLE "billing_events" ADD CONSTRAINT "billing_events_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+      END IF;
+    END $$`,
+  ];
+
+  try {
+    for (const statement of statements) {
+      await pool.query(statement);
+    }
+  } catch (error) {
+    console.error("Database bootstrap failed. Account endpoints may be unavailable until migrations run.", error);
+  }
+}
+
+function requireDatabase() {
+  if (!pool) {
+    const error = new Error("DATABASE_URL is not configured.");
+    error.statusCode = 503;
+    throw error;
+  }
+}
+
+function normalizeEmail(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  const email = value.trim().toLowerCase();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : "";
+}
+
+function getBearerToken(request) {
+  const header = request.get("authorization") || "";
+  const [scheme, token] = header.split(" ");
+  return scheme?.toLowerCase() === "bearer" && token ? token.trim() : "";
+}
+
+function hashSecret(value) {
+  const key = process.env.TABLETOPFORGE_AUTH_SECRET || process.env.OPENAI_API_KEY || process.env.TABLETOPFORGE_AI_ACCESS_CODE || "dev-only";
+  return crypto.createHmac("sha256", key).update(value).digest("hex");
 }
 
 function getAllowedOrigins() {
@@ -156,6 +724,26 @@ function getAllowedOrigins() {
     .split(",")
     .map((origin) => origin.trim())
     .filter(Boolean);
+}
+
+function getPublicAppUrl(request) {
+  return (process.env.PUBLIC_APP_URL || request.get("origin") || "https://tatewilson1.github.io/TabletopForge").replace(/\/$/, "");
+}
+
+function getAuthDeliveryMode() {
+  return process.env.TABLETOPFORGE_AUTH_DELIVERY_MODE === "email" ? "email" : "screen";
+}
+
+function validateAiConfig() {
+  if (!process.env.OPENAI_API_KEY) {
+    return "OPENAI_API_KEY is not configured.";
+  }
+
+  if (!process.env.TABLETOPFORGE_AI_ACCESS_CODE && !pool) {
+    return "Configure TABLETOPFORGE_AI_ACCESS_CODE or DATABASE_URL-backed user sessions.";
+  }
+
+  return "";
 }
 
 function getRequestAccessCode(request) {
@@ -286,5 +874,18 @@ function asStringArray(value, maxItems) {
     return [];
   }
 
-  return value.filter((item) => typeof item === "string").slice(0, maxItems).map((item) => item.slice(0, 500));
+  return value
+    .filter((item) => typeof item === "string")
+    .slice(0, maxItems)
+    .map((item) => item.slice(0, 500));
+}
+
+function sendAuthError(response, error) {
+  const statusCode = error.statusCode || 500;
+  response.status(statusCode).json({ error: statusCode === 500 ? "Request failed." : error.message });
+}
+
+function sendApiError(response, error, fallbackMessage) {
+  const statusCode = error.statusCode || 500;
+  response.status(statusCode).json({ error: statusCode === 500 ? fallbackMessage : error.message });
 }

@@ -1,0 +1,271 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { CreditCard, LogOut, Mail, RefreshCw, ShieldCheck, UserCheck } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  clearSessionToken,
+  createCheckoutSession,
+  fetchAccount,
+  getStoredSessionToken,
+  isAccountApiConfigured,
+  requestLoginCode,
+  signOut,
+  verifyLoginCode,
+  type AccountState,
+} from "@/lib/account";
+
+export function AccountPanel({
+  compact = false,
+  onAccountChange,
+}: {
+  compact?: boolean;
+  onAccountChange?: (account: AccountState | null) => void;
+}) {
+  const [account, setAccount] = useState<AccountState | null>(null);
+  const [email, setEmail] = useState("");
+  const [code, setCode] = useState("");
+  const [screenCode, setScreenCode] = useState("");
+  const [notice, setNotice] = useState("");
+  const [error, setError] = useState("");
+  const [isBusy, setIsBusy] = useState(false);
+
+  useEffect(() => {
+    if (!isAccountApiConfigured() || !getStoredSessionToken()) {
+      onAccountChange?.(null);
+      return;
+    }
+
+    refreshAccount();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function refreshAccount() {
+    setIsBusy(true);
+    setError("");
+    try {
+      const nextAccount = await fetchAccount();
+      setAccount(nextAccount);
+      onAccountChange?.(nextAccount);
+    } catch (requestError) {
+      clearSessionToken();
+      setAccount(null);
+      onAccountChange?.(null);
+      setError(getErrorMessage(requestError));
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function handleRequestCode() {
+    setIsBusy(true);
+    setError("");
+    setNotice("");
+    setScreenCode("");
+    try {
+      const response = await requestLoginCode(email);
+      setNotice(response.message);
+      if (response.loginCode) {
+        setScreenCode(response.loginCode);
+        setCode(response.loginCode);
+      }
+    } catch (requestError) {
+      setError(getErrorMessage(requestError));
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function handleVerifyCode() {
+    setIsBusy(true);
+    setError("");
+    try {
+      const nextAccount = await verifyLoginCode(email, code);
+      setAccount(nextAccount);
+      onAccountChange?.(nextAccount);
+      setNotice("Signed in. Your account is ready.");
+      setScreenCode("");
+    } catch (requestError) {
+      setError(getErrorMessage(requestError));
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function handleSignOut() {
+    setIsBusy(true);
+    setError("");
+    try {
+      await signOut();
+      setAccount(null);
+      onAccountChange?.(null);
+      setNotice("Signed out.");
+    } catch (requestError) {
+      setError(getErrorMessage(requestError));
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function handleCheckout(purchaseType: "tabletop" | "subscription") {
+    setIsBusy(true);
+    setError("");
+    try {
+      const checkout = await createCheckoutSession(purchaseType);
+      window.location.href = checkout.url;
+    } catch (requestError) {
+      setError(getErrorMessage(requestError));
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  if (!isAccountApiConfigured()) {
+    return (
+      <Card className="bg-card/75">
+        <CardHeader>
+          <CardTitle>Local Demo Mode</CardTitle>
+          <CardDescription>The backend URL is not configured, so generation runs locally in this browser.</CardDescription>
+        </CardHeader>
+      </Card>
+    );
+  }
+
+  if (account) {
+    return (
+      <Card className="bg-card/80">
+        <CardHeader>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <UserCheck className="size-5 text-primary" suppressHydrationWarning />
+                Account
+              </CardTitle>
+              <CardDescription>{account.user.email}</CardDescription>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" size="sm" onClick={refreshAccount} disabled={isBusy}>
+                <RefreshCw className="size-4" suppressHydrationWarning />
+                Refresh
+              </Button>
+              <Button variant="ghost" size="sm" onClick={handleSignOut} disabled={isBusy}>
+                <LogOut className="size-4" suppressHydrationWarning />
+                Sign Out
+              </Button>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <AccountMetric label="Free tabletop" value={account.entitlements.freeGenerationsRemaining.toString()} />
+            <AccountMetric label="Purchased credits" value={account.entitlements.generationCredits.toString()} />
+            <AccountMetric label="Plan" value={formatPlan(account.entitlements.billingPlan, account.entitlements.subscriptionStatus)} />
+          </div>
+
+          {!compact ? (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Button variant="outline" onClick={() => handleCheckout("tabletop")} disabled={isBusy}>
+                <CreditCard className="size-4" suppressHydrationWarning />
+                Buy One Tabletop
+              </Button>
+              <Button onClick={() => handleCheckout("subscription")} disabled={isBusy}>
+                <ShieldCheck className="size-4" suppressHydrationWarning />
+                Start Subscription
+              </Button>
+            </div>
+          ) : null}
+
+          {notice ? <p className="text-sm text-primary">{notice}</p> : null}
+          {error ? <p className="text-sm text-destructive">{error}</p> : null}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="bg-card/80">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Mail className="size-5 text-primary" suppressHydrationWarning />
+          Sign In
+        </CardTitle>
+        <CardDescription>
+          Sign in to use your free tabletop generation and keep paid credits tied to your account.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+          <div className="space-y-2">
+            <Label htmlFor={compact ? "compactEmail" : "accountEmail"}>Email</Label>
+            <Input
+              id={compact ? "compactEmail" : "accountEmail"}
+              type="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              placeholder="you@example.com"
+            />
+          </div>
+          <Button className="self-end" onClick={handleRequestCode} disabled={isBusy || email.trim().length < 5}>
+            Send Code
+          </Button>
+        </div>
+
+        {screenCode ? (
+          <div className="rounded-md border border-primary/30 bg-primary/10 p-3">
+            <p className="text-sm font-medium text-primary">Temporary setup code</p>
+            <p className="mt-1 font-mono text-lg text-foreground">{screenCode}</p>
+          </div>
+        ) : null}
+
+        <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+          <div className="space-y-2">
+            <Label htmlFor={compact ? "compactCode" : "accountCode"}>Code</Label>
+            <Input
+              id={compact ? "compactCode" : "accountCode"}
+              value={code}
+              onChange={(event) => setCode(event.target.value)}
+              placeholder="6-digit code"
+            />
+          </div>
+          <Button className="self-end" variant="secondary" onClick={handleVerifyCode} disabled={isBusy || code.trim().length < 6}>
+            Verify
+          </Button>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <Badge variant="outline">1 free generation</Badge>
+          <Badge variant="outline">Paid credits ready</Badge>
+          <Badge variant="outline">Subscription ready</Badge>
+        </div>
+
+        {notice ? <p className="text-sm text-primary">{notice}</p> : null}
+        {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+function AccountMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-border bg-background/50 p-3">
+      <p className="text-xs uppercase text-muted-foreground">{label}</p>
+      <p className="mt-1 text-sm font-semibold text-foreground">{value}</p>
+    </div>
+  );
+}
+
+function formatPlan(plan: string, status: string) {
+  if (plan === "subscription") {
+    return status === "active" || status === "trialing" ? "Subscription" : `Subscription ${status}`;
+  }
+
+  return "Free";
+}
+
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "Something went wrong.";
+}

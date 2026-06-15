@@ -47,20 +47,20 @@ export default function HomePage() {
               TabletopForge
             </h1>
             <p className="max-w-2xl text-xl leading-8 text-muted-foreground">
-              Simple incident response tabletop exercises for real-world readiness.
+              Generate your first incident response tabletop free.
             </p>
             <p className="max-w-3xl text-base leading-7 text-muted-foreground">
-              Generate practical, non-technical tabletop packages that help small businesses, MSPs, IT teams, and cybersecurity students find gaps in their incident response plans.
+              Create practical, non-technical tabletop exercises that help small businesses, MSPs, IT teams, and cybersecurity students find gaps in their incident response plans. After the free generation, continue with pay-per-tabletop credits or a subscription.
             </p>
           </div>
           <div className="flex flex-col gap-3 sm:flex-row">
             <Button asChild size="lg">
               <Link href="/generate">
-                Generate Exercise <ArrowRight className="size-4" suppressHydrationWarning />
+                Start Free Generation <ArrowRight className="size-4" suppressHydrationWarning />
               </Link>
             </Button>
             <Button asChild size="lg" variant="outline">
-              <Link href="/saved">View Saved Exercises</Link>
+              <Link href="/pricing">View Pricing</Link>
             </Button>
           </div>
           <div className="grid gap-2 rounded-md border border-border bg-background/55 p-4 sm:grid-cols-2">
