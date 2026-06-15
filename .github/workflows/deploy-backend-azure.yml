@@ -1,5 +1,7 @@
 name: Deploy Backend to Azure App Service
 
+# Backend-only deployment for the Azure App Service API.
+
 on:
   push:
     branches: ["main"]
