@@ -611,6 +611,97 @@ async function ensureSaasSchema() {
   }
 
   const statements = [
+    `CREATE TABLE IF NOT EXISTS "users" (
+      "id" UUID NOT NULL,
+      "email" TEXT NOT NULL,
+      "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "freeGenerationsRemaining" INTEGER NOT NULL DEFAULT 1,
+      "generationCredits" INTEGER NOT NULL DEFAULT 0,
+      "billingPlan" TEXT NOT NULL DEFAULT 'free',
+      "subscriptionStatus" TEXT NOT NULL DEFAULT 'none',
+      "stripeCustomerId" TEXT,
+      CONSTRAINT "users_pkey" PRIMARY KEY ("id")
+    )`,
+    `CREATE TABLE IF NOT EXISTS "tabletops" (
+      "id" UUID NOT NULL,
+      "userId" UUID,
+      "title" TEXT NOT NULL,
+      "status" TEXT NOT NULL DEFAULT 'draft',
+      "generationSource" TEXT NOT NULL DEFAULT 'local',
+      "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "deletedAt" TIMESTAMP(3),
+      CONSTRAINT "tabletops_pkey" PRIMARY KEY ("id")
+    )`,
+    `CREATE TABLE IF NOT EXISTS "uploaded_files" (
+      "id" UUID NOT NULL,
+      "tabletopId" UUID NOT NULL,
+      "blobContainer" TEXT NOT NULL,
+      "blobPath" TEXT NOT NULL,
+      "originalFilename" TEXT NOT NULL,
+      "contentType" TEXT,
+      "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "deletedAt" TIMESTAMP(3),
+      "deleteStatus" TEXT NOT NULL DEFAULT 'active',
+      CONSTRAINT "uploaded_files_pkey" PRIMARY KEY ("id")
+    )`,
+    `CREATE TABLE IF NOT EXISTS "ai_runs" (
+      "id" UUID NOT NULL,
+      "tabletopId" UUID NOT NULL,
+      "userId" UUID,
+      "model" TEXT NOT NULL,
+      "promptType" TEXT NOT NULL,
+      "status" TEXT NOT NULL DEFAULT 'pending',
+      "inputTokens" INTEGER,
+      "outputTokens" INTEGER,
+      "costEstimateUsd" DECIMAL(10,6),
+      "resultJson" JSONB,
+      "errorMessage" TEXT,
+      "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "completedAt" TIMESTAMP(3),
+      CONSTRAINT "ai_runs_pkey" PRIMARY KEY ("id")
+    )`,
+    `CREATE TABLE IF NOT EXISTS "deletion_logs" (
+      "id" UUID NOT NULL,
+      "tabletopId" UUID NOT NULL,
+      "deletedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "status" TEXT NOT NULL,
+      "notes" TEXT,
+      CONSTRAINT "deletion_logs_pkey" PRIMARY KEY ("id")
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "users_email_key" ON "users"("email")`,
+    `CREATE INDEX IF NOT EXISTS "tabletops_userId_idx" ON "tabletops"("userId")`,
+    `CREATE INDEX IF NOT EXISTS "tabletops_status_idx" ON "tabletops"("status")`,
+    `CREATE INDEX IF NOT EXISTS "tabletops_deletedAt_idx" ON "tabletops"("deletedAt")`,
+    `CREATE INDEX IF NOT EXISTS "uploaded_files_tabletopId_idx" ON "uploaded_files"("tabletopId")`,
+    `CREATE INDEX IF NOT EXISTS "uploaded_files_deleteStatus_idx" ON "uploaded_files"("deleteStatus")`,
+    `CREATE INDEX IF NOT EXISTS "uploaded_files_deletedAt_idx" ON "uploaded_files"("deletedAt")`,
+    `CREATE INDEX IF NOT EXISTS "ai_runs_tabletopId_idx" ON "ai_runs"("tabletopId")`,
+    `CREATE INDEX IF NOT EXISTS "ai_runs_promptType_idx" ON "ai_runs"("promptType")`,
+    `CREATE INDEX IF NOT EXISTS "ai_runs_status_idx" ON "ai_runs"("status")`,
+    `CREATE INDEX IF NOT EXISTS "deletion_logs_tabletopId_idx" ON "deletion_logs"("tabletopId")`,
+    `CREATE INDEX IF NOT EXISTS "deletion_logs_status_idx" ON "deletion_logs"("status")`,
+    `DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'tabletops_userId_fkey') THEN
+        ALTER TABLE "tabletops" ADD CONSTRAINT "tabletops_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+      END IF;
+    END $$`,
+    `DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'uploaded_files_tabletopId_fkey') THEN
+        ALTER TABLE "uploaded_files" ADD CONSTRAINT "uploaded_files_tabletopId_fkey" FOREIGN KEY ("tabletopId") REFERENCES "tabletops"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+      END IF;
+    END $$`,
+    `DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ai_runs_tabletopId_fkey') THEN
+        ALTER TABLE "ai_runs" ADD CONSTRAINT "ai_runs_tabletopId_fkey" FOREIGN KEY ("tabletopId") REFERENCES "tabletops"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+      END IF;
+    END $$`,
+    `DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'deletion_logs_tabletopId_fkey') THEN
+        ALTER TABLE "deletion_logs" ADD CONSTRAINT "deletion_logs_tabletopId_fkey" FOREIGN KEY ("tabletopId") REFERENCES "tabletops"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+      END IF;
+    END $$`,
     `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "billingPlan" TEXT NOT NULL DEFAULT 'free'`,
     `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "freeGenerationsRemaining" INTEGER NOT NULL DEFAULT 1`,
     `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "generationCredits" INTEGER NOT NULL DEFAULT 0`,
