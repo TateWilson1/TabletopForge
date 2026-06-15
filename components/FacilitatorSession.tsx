@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Award,
   CheckCircle2,
@@ -75,6 +75,11 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
   const [facilitatorHint, setFacilitatorHint] = useState("");
   const [injectTimerSeconds, setInjectTimerSeconds] = useState(() => buildInjectTimerSeconds(steps[0]?.duration ?? "5 min"));
   const [diceRoll, setDiceRoll] = useState<{ value: number; injectText: string } | null>(null);
+  const [isRollingDice, setIsRollingDice] = useState(false);
+  const [rollingValue, setRollingValue] = useState(1);
+  const [promptIndexes, setPromptIndexes] = useState<Record<string, number>>({});
+  const diceIntervalRef = useRef<number | null>(null);
+  const diceTimeoutRef = useRef<number | null>(null);
 
   const activeStep = steps[activeIndex];
   const progress = Math.round(((activeIndex + 1) / steps.length) * 100);
@@ -86,14 +91,31 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
     () => activeStep.injects.filter((inject) => !revealedInjects.some((revealed) => revealed.id === inject.id)),
     [activeStep.injects, revealedInjects],
   );
+  const activePromptIndex = Math.min(promptIndexes[activeStep.title] ?? 0, Math.max(0, activeStep.prompts.length - 1));
+  const activePrompt = activeStep.prompts[activePromptIndex] ?? "";
+
+  const clearDiceTimers = useCallback(() => {
+    if (diceIntervalRef.current !== null) {
+      window.clearInterval(diceIntervalRef.current);
+      diceIntervalRef.current = null;
+    }
+
+    if (diceTimeoutRef.current !== null) {
+      window.clearTimeout(diceTimeoutRef.current);
+      diceTimeoutRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
     setInjectTimerSeconds(buildInjectTimerSeconds(activeStep.duration));
     setDiceRoll(null);
-  }, [activeStep.duration, activeStep.title]);
+    setIsRollingDice(false);
+    setRollingValue(1);
+    clearDiceTimers();
+  }, [activeStep.duration, activeStep.title, clearDiceTimers]);
 
   useEffect(() => {
-    if (isPaused || availableInjects.length === 0 || injectTimerSeconds === 0) {
+    if (isPaused || isRollingDice || availableInjects.length === 0 || injectTimerSeconds === 0) {
       return;
     }
 
@@ -102,23 +124,47 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
     }, 1000);
 
     return () => window.clearInterval(timerId);
-  }, [availableInjects.length, injectTimerSeconds, isPaused]);
+  }, [availableInjects.length, injectTimerSeconds, isPaused, isRollingDice]);
 
-  const revealInject = useCallback(() => {
+  const triggerInjectRoll = useCallback(() => {
     const nextInject = availableInjects[0];
 
-    if (nextInject) {
-      setRevealedInjects((current) => [...current, { ...nextInject, stepTitle: activeStep.title }]);
+    if (!nextInject || isRollingDice) {
+      return;
+    }
+
+    const finalValue = buildDiceRoll(nextInject);
+    let tick = 0;
+
+    clearDiceTimers();
+    setDiceRoll(null);
+    setIsRollingDice(true);
+    setRollingValue(((hashSeed(`${nextInject.id}:start`) % 20) + 1));
+
+    diceIntervalRef.current = window.setInterval(() => {
+      tick += 1;
+      setRollingValue((hashSeed(`${nextInject.id}:${tick}`) % 20) + 1);
+    }, 70);
+
+    diceTimeoutRef.current = window.setTimeout(() => {
+      clearDiceTimers();
+      setRollingValue(finalValue);
+      setRevealedInjects((current) =>
+        current.some((inject) => inject.id === nextInject.id) ? current : [...current, { ...nextInject, stepTitle: activeStep.title }],
+      );
       setDiceRoll({ value: buildDiceRoll(nextInject), injectText: nextInject.text });
       setInjectTimerSeconds(availableInjects.length > 1 ? buildInjectTimerSeconds(activeStep.duration) : 0);
-    }
-  }, [activeStep.duration, activeStep.title, availableInjects]);
+      setIsRollingDice(false);
+    }, 900);
+  }, [activeStep.duration, activeStep.title, availableInjects, clearDiceTimers, isRollingDice]);
 
   useEffect(() => {
     if (!isPaused && injectTimerSeconds === 0 && availableInjects.length > 0) {
-      revealInject();
+      triggerInjectRoll();
     }
-  }, [availableInjects.length, injectTimerSeconds, isPaused, revealInject]);
+  }, [availableInjects.length, injectTimerSeconds, isPaused, triggerInjectRoll]);
+
+  useEffect(() => clearDiceTimers, [clearDiceTimers]);
 
   function moveStep(direction: -1 | 1) {
     setActiveIndex((current) => Math.min(steps.length - 1, Math.max(0, current + direction)));
@@ -130,8 +176,12 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
     setRevealedInjects([]);
     setDecisionStatuses({});
     setCompletedSteps({});
+    setPromptIndexes({});
     setFacilitatorHint("");
     setDiceRoll(null);
+    setIsRollingDice(false);
+    setRollingValue(1);
+    clearDiceTimers();
     setSessionNotes("");
     setActionItems("");
     setExportNotice("");
@@ -146,6 +196,13 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
 
   function toggleStepComplete(checked: boolean) {
     setCompletedSteps((current) => ({ ...current, [activeStep.title]: checked }));
+  }
+
+  function movePrompt(direction: -1 | 1) {
+    setPromptIndexes((current) => ({
+      ...current,
+      [activeStep.title]: Math.min(activeStep.prompts.length - 1, Math.max(0, activePromptIndex + direction)),
+    }));
   }
 
   async function copySessionSummary() {
@@ -295,7 +352,13 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
               onToggleDecision={toggleDecision}
             />
 
-            <PromptList title="Discuss This Now" items={activeStep.prompts} />
+            <PromptCard
+              prompt={activePrompt}
+              currentIndex={activePromptIndex}
+              total={activeStep.prompts.length}
+              onBack={() => movePrompt(-1)}
+              onNext={() => movePrompt(1)}
+            />
 
             <section className="space-y-3 rounded-md border border-border bg-background/45 p-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -323,9 +386,9 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
                   <p className="mt-1 text-sm text-muted-foreground">The next development will arrive when the timer ends, or you can roll now.</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <Button onClick={revealInject} disabled={availableInjects.length === 0}>
+                  <Button onClick={triggerInjectRoll} disabled={availableInjects.length === 0 || isRollingDice}>
                     <Dices className="size-4" suppressHydrationWarning />
-                    Roll Now
+                    {isRollingDice ? "Rolling..." : "Roll Now"}
                   </Button>
                 </div>
               </div>
@@ -338,10 +401,10 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
                       {availableInjects.length > 0 ? `Arrives in ${formatSeconds(injectTimerSeconds)}.` : "No more injects for this section."}
                     </p>
                   </div>
-                  {diceRoll ? (
-                    <div className="rounded-md border border-primary/35 bg-primary/10 px-4 py-3 text-center animate-pulse">
+                  {isRollingDice || diceRoll ? (
+                    <div className={`rounded-md border border-primary/35 bg-primary/10 px-4 py-3 text-center ${isRollingDice ? "animate-bounce" : "animate-pulse"}`}>
                       <p className="text-xs uppercase text-muted-foreground">d20 roll</p>
-                      <p className="text-3xl font-semibold text-primary">{diceRoll.value}</p>
+                      <p className="text-3xl font-semibold text-primary">{isRollingDice ? rollingValue : diceRoll?.value}</p>
                     </div>
                   ) : null}
                 </div>
@@ -436,17 +499,42 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
   );
 }
 
-function PromptList({ title, items }: { title: string; items: string[] }) {
+function PromptCard({
+  prompt,
+  currentIndex,
+  total,
+  onBack,
+  onNext,
+}: {
+  prompt: string;
+  currentIndex: number;
+  total: number;
+  onBack: () => void;
+  onNext: () => void;
+}) {
   return (
-    <section>
-      <h3 className="mb-3 font-semibold">{title}</h3>
-      <ul className="space-y-2">
-        {items.map((item, index) => (
-          <li key={`${title}-${index}-${item}`} className="rounded-md border border-border bg-background/45 p-3 text-sm leading-6 text-muted-foreground">
-            {item}
-          </li>
-        ))}
-      </ul>
+    <section className="rounded-md border border-border bg-background/45 p-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h3 className="font-semibold">Discuss This Now</h3>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Question {Math.min(currentIndex + 1, total)} of {total}
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={onBack} disabled={currentIndex === 0}>
+            <ChevronLeft className="size-4" suppressHydrationWarning />
+            Previous
+          </Button>
+          <Button variant="outline" size="sm" onClick={onNext} disabled={currentIndex >= total - 1}>
+            Next
+            <ChevronRight className="size-4" suppressHydrationWarning />
+          </Button>
+        </div>
+      </div>
+      <div className="mt-4 rounded-md border border-primary/25 bg-primary/10 p-4">
+        <p className="text-base leading-7 text-foreground">{prompt}</p>
+      </div>
     </section>
   );
 }
