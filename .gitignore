@@ -8,3 +8,5 @@ coverage
 .vercel
 work
 outputs
+
+/generated/prisma

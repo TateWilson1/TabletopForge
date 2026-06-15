@@ -1,0 +1,80 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id        String     @id @default(uuid()) @db.Uuid
+  email     String     @unique
+  createdAt DateTime   @default(now())
+  tabletops Tabletop[]
+
+  @@map("users")
+}
+
+model Tabletop {
+  id            String        @id @default(uuid()) @db.Uuid
+  userId        String?       @db.Uuid
+  user          User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  title         String
+  status        String        @default("draft")
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  deletedAt     DateTime?
+  uploadedFiles UploadedFile[]
+  aiRuns        AiRun[]
+  deletionLogs  DeletionLog[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([deletedAt])
+  @@map("tabletops")
+}
+
+model UploadedFile {
+  id               String    @id @default(uuid()) @db.Uuid
+  tabletopId       String    @db.Uuid
+  tabletop         Tabletop  @relation(fields: [tabletopId], references: [id], onDelete: Cascade)
+  blobContainer    String
+  blobPath         String
+  originalFilename String
+  contentType      String?
+  createdAt        DateTime  @default(now())
+  deletedAt        DateTime?
+  deleteStatus     String    @default("active")
+
+  @@index([tabletopId])
+  @@index([deleteStatus])
+  @@index([deletedAt])
+  @@map("uploaded_files")
+}
+
+model AiRun {
+  id         String   @id @default(uuid()) @db.Uuid
+  tabletopId String   @db.Uuid
+  tabletop   Tabletop @relation(fields: [tabletopId], references: [id], onDelete: Cascade)
+  model      String
+  promptType String
+  createdAt  DateTime @default(now())
+
+  @@index([tabletopId])
+  @@index([promptType])
+  @@map("ai_runs")
+}
+
+model DeletionLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  tabletopId String   @db.Uuid
+  tabletop   Tabletop @relation(fields: [tabletopId], references: [id], onDelete: Cascade)
+  deletedAt  DateTime @default(now())
+  status     String
+  notes      String?
+
+  @@index([tabletopId])
+  @@index([status])
+  @@map("deletion_logs")
+}
