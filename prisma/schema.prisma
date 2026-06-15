@@ -54,15 +54,23 @@ model UploadedFile {
 }
 
 model AiRun {
-  id         String   @id @default(uuid()) @db.Uuid
-  tabletopId String   @db.Uuid
-  tabletop   Tabletop @relation(fields: [tabletopId], references: [id], onDelete: Cascade)
-  model      String
-  promptType String
-  createdAt  DateTime @default(now())
+  id              String   @id @default(uuid()) @db.Uuid
+  tabletopId      String   @db.Uuid
+  tabletop        Tabletop @relation(fields: [tabletopId], references: [id], onDelete: Cascade)
+  model           String
+  promptType      String
+  status          String   @default("pending")
+  inputTokens     Int?
+  outputTokens    Int?
+  costEstimateUsd Decimal? @db.Decimal(10, 6)
+  resultJson      Json?
+  errorMessage    String?
+  createdAt       DateTime @default(now())
+  completedAt     DateTime?
 
   @@index([tabletopId])
   @@index([promptType])
+  @@index([status])
   @@map("ai_runs")
 }
 
