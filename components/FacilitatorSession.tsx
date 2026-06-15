@@ -113,7 +113,7 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
   }, [activeStep.duration, activeStep.title, clearDiceTimers]);
 
   useEffect(() => {
-    if (isPaused || isRollingDice || availableInjects.length === 0 || injectTimerSeconds === 0) {
+    if (isPaused || isRollingDice || diceRoll || availableInjects.length === 0 || injectTimerSeconds === 0) {
       return;
     }
 
@@ -122,12 +122,12 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
     }, 1000);
 
     return () => window.clearInterval(timerId);
-  }, [availableInjects.length, injectTimerSeconds, isPaused, isRollingDice]);
+  }, [availableInjects.length, diceRoll, injectTimerSeconds, isPaused, isRollingDice]);
 
   const triggerInjectRoll = useCallback(() => {
     const nextInject = availableInjects[0];
 
-    if (!nextInject || isRollingDice) {
+    if (!nextInject || isRollingDice || diceRoll) {
       return;
     }
 
@@ -154,7 +154,7 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
       setInjectTimerSeconds(availableInjects.length > 1 ? buildInjectTimerSeconds(activeStep.duration) : 0);
       setIsRollingDice(false);
     }, 900);
-  }, [activeStep.duration, activeStep.title, availableInjects, clearDiceTimers, isRollingDice]);
+  }, [activeStep.duration, activeStep.title, availableInjects, clearDiceTimers, diceRoll, isRollingDice]);
 
   useEffect(() => {
     if (!isPaused && injectTimerSeconds === 0 && availableInjects.length > 0) {
@@ -331,20 +331,20 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
                 <Sparkles className="size-4" suppressHydrationWarning />
                 TabletopForge Facilitator
               </div>
-              <p className="leading-7 text-muted-foreground">{activeStep.facilitatorScript}</p>
+              <ReadingText text={activeStep.facilitatorScript} className="leading-7 text-muted-foreground" speed={32} />
             </section>
 
             <section className="rounded-md border border-border bg-background/55 p-4">
               <div>
                 <div className="text-sm font-medium text-foreground">Suggested Time And Facilitation Cue</div>
-                <p className="mt-1 text-sm leading-6 text-muted-foreground">{activeStep.pressureNote}</p>
+                <ReadingText text={activeStep.pressureNote} className="mt-1 text-sm leading-6 text-muted-foreground" speed={30} />
               </div>
             </section>
 
             {activeStep.scenarioBrief ? (
               <section className="rounded-md border border-border bg-background/55 p-4">
                 <div className="mb-2 text-sm font-medium text-foreground">Current Situation</div>
-                <p className="leading-7 text-muted-foreground">{activeStep.scenarioBrief}</p>
+                <ReadingText text={activeStep.scenarioBrief} className="leading-7 text-muted-foreground" speed={18} />
               </section>
             ) : null}
 
@@ -379,7 +379,9 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
                   The team is stuck
                 </Button>
               </div>
-              {facilitatorHint ? <p className="rounded-md bg-muted p-3 text-sm leading-6 text-muted-foreground">{facilitatorHint}</p> : null}
+              {facilitatorHint ? (
+                <ReadingText text={facilitatorHint} className="rounded-md bg-muted p-3 text-sm leading-6 text-muted-foreground" speed={26} />
+              ) : null}
             </section>
 
             <section className="rounded-md border border-accent/35 bg-accent/10 p-4">
@@ -392,7 +394,7 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
                       : "No more twists are queued for this section."}
                   </p>
                 </div>
-                <Button onClick={triggerInjectRoll} disabled={availableInjects.length === 0 || isRollingDice}>
+                <Button onClick={triggerInjectRoll} disabled={availableInjects.length === 0 || isRollingDice || Boolean(diceRoll)}>
                   <Dices className="size-4" suppressHydrationWarning />
                   {isRollingDice ? "Rolling..." : "Roll Now"}
                 </Button>
@@ -505,10 +507,73 @@ function PromptCard({
         </div>
       </div>
       <div className="mt-4 rounded-md border border-primary/25 bg-primary/10 p-4">
-        <p className="text-base leading-7 text-foreground">{prompt}</p>
+        <ReadingText text={prompt} className="text-base leading-7 text-foreground" speed={34} />
       </div>
     </section>
   );
+}
+
+function ReadingText({ text, className = "", speed = 34 }: { text: string; className?: string; speed?: number }) {
+  const prefersReducedMotion = usePrefersReducedMotion();
+  const words = useMemo(() => text.split(/\s+/).filter(Boolean), [text]);
+  const [visibleCount, setVisibleCount] = useState(0);
+
+  useEffect(() => {
+    if (prefersReducedMotion) {
+      setVisibleCount(words.length);
+      return;
+    }
+
+    setVisibleCount(0);
+
+    if (words.length === 0) {
+      return;
+    }
+
+    const batchSize = words.length > 90 ? 3 : words.length > 45 ? 2 : 1;
+    let nextCount = 0;
+    const timerId = window.setInterval(() => {
+      nextCount = Math.min(words.length, nextCount + batchSize);
+      setVisibleCount(nextCount);
+
+      if (nextCount >= words.length) {
+        window.clearInterval(timerId);
+      }
+    }, speed);
+
+    return () => window.clearInterval(timerId);
+  }, [prefersReducedMotion, speed, text, words.length]);
+
+  return (
+    <p className={className} aria-label={text}>
+      {words.map((word, index) => (
+        <span
+          key={`${word}-${index}`}
+          aria-hidden="true"
+          className={index < visibleCount ? "reading-word-visible" : "reading-word-hidden"}
+        >
+          {word}
+          {index < words.length - 1 ? " " : ""}
+        </span>
+      ))}
+    </p>
+  );
+}
+
+function usePrefersReducedMotion() {
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const updatePreference = () => setPrefersReducedMotion(mediaQuery.matches);
+
+    updatePreference();
+    mediaQuery.addEventListener("change", updatePreference);
+
+    return () => mediaQuery.removeEventListener("change", updatePreference);
+  }, []);
+
+  return prefersReducedMotion;
 }
 
 function InjectOverlay({
@@ -553,7 +618,7 @@ function InjectOverlay({
           <div className="mx-auto max-w-2xl space-y-5">
             <div className="rounded-md border border-primary/35 bg-primary/10 p-5 text-left">
               <p className="text-sm font-semibold text-primary">New information</p>
-              <p className="mt-2 text-lg leading-8 text-foreground">{diceRoll?.injectText}</p>
+              <ReadingText text={diceRoll?.injectText ?? ""} className="mt-2 text-lg leading-8 text-foreground" speed={28} />
             </div>
             <Button size="lg" onClick={onDismiss}>
               Return To Discussion
@@ -601,7 +666,11 @@ function BoardList({ title, items }: { title: string; items: string[] }) {
       <h3 className="mb-3 text-sm font-semibold text-foreground">{title}</h3>
       <ul className="space-y-2">
         {items.map((item, index) => (
-          <li key={`${title}-${index}-${item}`} className="text-sm leading-6 text-muted-foreground">
+          <li
+            key={`${title}-${index}-${item}`}
+            className="session-list-item text-sm leading-6 text-muted-foreground"
+            style={{ animationDelay: `${Math.min(index * 70, 420)}ms` }}
+          >
             {item}
           </li>
         ))}
@@ -631,7 +700,11 @@ function DecisionList({
           const checked = decisionStatuses[decisionKey(stepTitle, item)] === true;
 
           return (
-            <li key={`${stepTitle}-${index}-${item}`} className="flex gap-3 text-sm leading-6 text-muted-foreground">
+            <li
+              key={`${stepTitle}-${index}-${item}`}
+              className="session-list-item flex gap-3 text-sm leading-6 text-muted-foreground"
+              style={{ animationDelay: `${Math.min(index * 70, 420)}ms` }}
+            >
               <Checkbox checked={checked} onCheckedChange={(value) => onToggleDecision(item, value === true)} className="mt-1" />
               <div className="space-y-1">
                 <p>{item}</p>
