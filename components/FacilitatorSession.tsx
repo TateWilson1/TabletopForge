@@ -23,6 +23,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { buildCompletedSessionHtmlReport, downloadTextFile, safeFilename } from "@/lib/report-export";
 import { saveCompletedSession } from "@/lib/storage";
@@ -60,6 +61,20 @@ interface FacilitatorStep {
   injects: Inject[];
 }
 
+interface AiInjectResponse {
+  inject: {
+    injectTitle: string;
+    injectText: string;
+    pressureLevel: "low" | "medium" | "high" | "critical";
+    followUpQuestion: string;
+    expectedDecision: string;
+  };
+}
+
+const TABLETOPFORGE_API_URL = (process.env.NEXT_PUBLIC_TABLETOPFORGE_API_URL || "").replace(/\/$/, "");
+const AI_ENABLED_STORAGE_KEY = "tabletopforge.aiInjectsEnabled";
+const AI_ACCESS_CODE_STORAGE_KEY = "tabletopforge.aiAccessCode";
+
 export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }) {
   const steps = useMemo(() => buildFacilitatorSteps(exercise), [exercise]);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -77,20 +92,33 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
   const [isRollingDice, setIsRollingDice] = useState(false);
   const [rollingValue, setRollingValue] = useState(1);
   const [promptIndexes, setPromptIndexes] = useState<Record<string, number>>({});
+  const [aiInjectsEnabled, setAiInjectsEnabled] = useState(false);
+  const [aiAccessCode, setAiAccessCode] = useState("");
+  const [aiInjectNotice, setAiInjectNotice] = useState("");
   const diceIntervalRef = useRef<number | null>(null);
   const diceTimeoutRef = useRef<number | null>(null);
 
   const activeStep = steps[activeIndex];
   const progress = Math.round(((activeIndex + 1) / steps.length) * 100);
-  const activeRevealedInjects = revealedInjects.filter((inject) => inject.stepTitle === activeStep.title);
-  const knownFacts = [...activeStep.knownFacts, ...activeRevealedInjects.map((inject) => inject.fact)];
-  const unknowns = [...activeStep.unknowns, ...activeRevealedInjects.map((inject) => inject.unknown)];
+  const activeRevealedInjects = useMemo(
+    () => revealedInjects.filter((inject) => inject.stepTitle === activeStep.title),
+    [activeStep.title, revealedInjects],
+  );
+  const knownFacts = useMemo(
+    () => [...activeStep.knownFacts, ...activeRevealedInjects.map((inject) => inject.fact)],
+    [activeRevealedInjects, activeStep.knownFacts],
+  );
+  const unknowns = useMemo(
+    () => [...activeStep.unknowns, ...activeRevealedInjects.map((inject) => inject.unknown)],
+    [activeRevealedInjects, activeStep.unknowns],
+  );
   const availableInjects = useMemo(
     () => activeStep.injects.filter((inject) => !revealedInjects.some((revealed) => revealed.id === inject.id)),
     [activeStep.injects, revealedInjects],
   );
   const activePromptIndex = Math.min(promptIndexes[activeStep.title] ?? 0, Math.max(0, activeStep.prompts.length - 1));
   const activePrompt = activeStep.prompts[activePromptIndex] ?? "";
+  const canUseAiInjects = aiInjectsEnabled && TABLETOPFORGE_API_URL.length > 0 && aiAccessCode.trim().length > 0;
 
   const clearDiceTimers = useCallback(() => {
     if (diceIntervalRef.current !== null) {
@@ -109,8 +137,14 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
     setDiceRoll(null);
     setIsRollingDice(false);
     setRollingValue(1);
+    setAiInjectNotice("");
     clearDiceTimers();
   }, [activeStep.duration, activeStep.title, clearDiceTimers]);
+
+  useEffect(() => {
+    setAiInjectsEnabled(window.localStorage.getItem(AI_ENABLED_STORAGE_KEY) === "true");
+    setAiAccessCode(window.localStorage.getItem(AI_ACCESS_CODE_STORAGE_KEY) ?? "");
+  }, []);
 
   useEffect(() => {
     if (isPaused || isRollingDice || diceRoll || availableInjects.length === 0 || injectTimerSeconds === 0) {
@@ -136,6 +170,7 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
 
     clearDiceTimers();
     setDiceRoll(null);
+    setAiInjectNotice("");
     setIsRollingDice(true);
     setRollingValue(((hashSeed(`${nextInject.id}:start`) % 20) + 1));
 
@@ -144,17 +179,42 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
       setRollingValue((hashSeed(`${nextInject.id}:${tick}`) % 20) + 1);
     }, 70);
 
-    diceTimeoutRef.current = window.setTimeout(() => {
+    diceTimeoutRef.current = window.setTimeout(async () => {
       clearDiceTimers();
       setRollingValue(finalValue);
+      const resolvedInject = await resolveInject({
+        fallbackInject: nextInject,
+        exercise,
+        activeStep,
+        knownFacts,
+        unknowns,
+        revealedInjects,
+        sessionNotes,
+        aiAccessCode,
+        useAi: canUseAiInjects,
+        onNotice: setAiInjectNotice,
+      });
       setRevealedInjects((current) =>
-        current.some((inject) => inject.id === nextInject.id) ? current : [...current, { ...nextInject, stepTitle: activeStep.title }],
+        current.some((inject) => inject.id === nextInject.id) ? current : [...current, { ...resolvedInject, stepTitle: activeStep.title }],
       );
-      setDiceRoll({ value: finalValue, injectText: nextInject.text });
+      setDiceRoll({ value: finalValue, injectText: resolvedInject.text });
       setInjectTimerSeconds(availableInjects.length > 1 ? buildInjectTimerSeconds(activeStep.duration) : 0);
       setIsRollingDice(false);
     }, 900);
-  }, [activeStep.duration, activeStep.title, availableInjects, clearDiceTimers, diceRoll, isRollingDice]);
+  }, [
+    activeStep,
+    aiAccessCode,
+    availableInjects,
+    canUseAiInjects,
+    clearDiceTimers,
+    diceRoll,
+    exercise,
+    isRollingDice,
+    knownFacts,
+    revealedInjects,
+    sessionNotes,
+    unknowns,
+  ]);
 
   useEffect(() => {
     if (!isPaused && injectTimerSeconds === 0 && availableInjects.length > 0) {
@@ -201,6 +261,18 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
       ...current,
       [activeStep.title]: Math.min(activeStep.prompts.length - 1, Math.max(0, activePromptIndex + direction)),
     }));
+  }
+
+  function updateAiInjectsEnabled(checked: boolean) {
+    setAiInjectsEnabled(checked);
+    window.localStorage.setItem(AI_ENABLED_STORAGE_KEY, String(checked));
+    setAiInjectNotice(checked ? "AI injects enabled. Built-in injects are still used if AI is unavailable." : "");
+  }
+
+  function updateAiAccessCode(value: string) {
+    setAiAccessCode(value);
+    window.localStorage.setItem(AI_ACCESS_CODE_STORAGE_KEY, value);
+    setAiInjectNotice("");
   }
 
   async function copySessionSummary() {
@@ -385,19 +457,42 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
             </section>
 
             <section className="rounded-md border border-accent/35 bg-accent/10 p-4">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <h3 className="font-semibold">Scenario Evolution</h3>
-                  <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                    {availableInjects.length > 0
-                      ? `The next twist drops in ${formatSeconds(injectTimerSeconds)}. Roll now if the room is ready for pressure.`
-                      : "No more twists are queued for this section."}
-                  </p>
+              <div className="space-y-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h3 className="font-semibold">Scenario Evolution</h3>
+                    <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                      {availableInjects.length > 0
+                        ? `The next twist drops in ${formatSeconds(injectTimerSeconds)}. Roll now if the room is ready for pressure.`
+                        : "No more twists are queued for this section."}
+                    </p>
+                  </div>
+                  <Button onClick={triggerInjectRoll} disabled={availableInjects.length === 0 || isRollingDice || Boolean(diceRoll)}>
+                    <Dices className="size-4" suppressHydrationWarning />
+                    {isRollingDice ? "Rolling..." : "Roll Now"}
+                  </Button>
                 </div>
-                <Button onClick={triggerInjectRoll} disabled={availableInjects.length === 0 || isRollingDice || Boolean(diceRoll)}>
-                  <Dices className="size-4" suppressHydrationWarning />
-                  {isRollingDice ? "Rolling..." : "Roll Now"}
-                </Button>
+
+                <div className="grid gap-3 rounded-md border border-border/70 bg-background/40 p-3 md:grid-cols-[0.85fr_1.15fr]">
+                  <label className="flex items-start gap-3 text-sm leading-6 text-muted-foreground">
+                    <Checkbox checked={aiInjectsEnabled} onCheckedChange={(value) => updateAiInjectsEnabled(value === true)} className="mt-1" />
+                    <span>
+                      <span className="block font-medium text-foreground">Use AI injects</span>
+                      <span>{TABLETOPFORGE_API_URL ? "Falls back automatically if AI is unavailable." : "Backend URL is not configured for this build."}</span>
+                    </span>
+                  </label>
+                  <Input
+                    type="password"
+                    value={aiAccessCode}
+                    onChange={(event) => updateAiAccessCode(event.target.value)}
+                    placeholder="AI access code"
+                    disabled={!aiInjectsEnabled}
+                  />
+                </div>
+                {aiInjectNotice ? <p className="text-sm leading-6 text-muted-foreground">{aiInjectNotice}</p> : null}
+                {!aiInjectNotice && aiInjectsEnabled && !aiAccessCode.trim() ? (
+                  <p className="text-sm leading-6 text-muted-foreground">Enter the access code to try AI-generated injects.</p>
+                ) : null}
               </div>
             </section>
 
@@ -628,6 +723,119 @@ function InjectOverlay({
       </div>
     </div>
   );
+}
+
+async function resolveInject({
+  fallbackInject,
+  exercise,
+  activeStep,
+  knownFacts,
+  unknowns,
+  revealedInjects,
+  sessionNotes,
+  aiAccessCode,
+  useAi,
+  onNotice,
+}: {
+  fallbackInject: Inject;
+  exercise: GeneratedExercise;
+  activeStep: FacilitatorStep;
+  knownFacts: string[];
+  unknowns: string[];
+  revealedInjects: RevealedInject[];
+  sessionNotes: string;
+  aiAccessCode: string;
+  useAi: boolean;
+  onNotice: (notice: string) => void;
+}): Promise<Inject> {
+  if (!useAi) {
+    return fallbackInject;
+  }
+
+  try {
+    const aiInject = await requestAiInject({
+      exercise,
+      activeStep,
+      knownFacts,
+      unknowns,
+      revealedInjects,
+      sessionNotes,
+      aiAccessCode,
+    });
+
+    onNotice("AI generated this twist.");
+    return {
+      id: fallbackInject.id,
+      text: aiInject.injectText,
+      fact: aiInject.injectText,
+      unknown: aiInject.followUpQuestion,
+    };
+  } catch {
+    onNotice("AI is unavailable right now, so TabletopForge used a built-in twist.");
+    return fallbackInject;
+  }
+}
+
+async function requestAiInject({
+  exercise,
+  activeStep,
+  knownFacts,
+  unknowns,
+  revealedInjects,
+  sessionNotes,
+  aiAccessCode,
+}: {
+  exercise: GeneratedExercise;
+  activeStep: FacilitatorStep;
+  knownFacts: string[];
+  unknowns: string[];
+  revealedInjects: RevealedInject[];
+  sessionNotes: string;
+  aiAccessCode: string;
+}): Promise<AiInjectResponse["inject"]> {
+  const response = await fetch(`${TABLETOPFORGE_API_URL}/api/ai/generate-inject`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-tabletopforge-ai-access-code": aiAccessCode.trim(),
+    },
+    body: JSON.stringify({
+      exercise: {
+        organization: exercise.overview.organization,
+        industry: exercise.overview.industry,
+        organizationSize: exercise.overview.organizationSize,
+        scenario: exercise.overview.scenario,
+        maturityLevel: exercise.overview.maturityLevel,
+        duration: exercise.overview.duration,
+        summary: exercise.scenarioSummary,
+        objectives: exercise.objectives,
+      },
+      currentStep: {
+        title: activeStep.title,
+        knownFacts,
+        unknowns,
+        decisions: activeStep.decisions,
+      },
+      previousInjects: revealedInjects.map((inject) => inject.text),
+      sessionNotes,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error("AI backend request failed.");
+  }
+
+  const data = (await response.json()) as AiInjectResponse;
+
+  if (
+    !data.inject ||
+    typeof data.inject.injectText !== "string" ||
+    typeof data.inject.followUpQuestion !== "string"
+  ) {
+    throw new Error("AI backend returned an invalid inject.");
+  }
+
+  return data.inject;
 }
 
 function TriageBoard({

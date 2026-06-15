@@ -127,6 +127,20 @@ After that, the static GitHub Pages frontend can call:
 https://YOUR-APP-SERVICE-NAME.azurewebsites.net/api/ai/generate-inject
 ```
 
+## Frontend Connection
+
+The static frontend reads the backend URL from:
+
+```env
+NEXT_PUBLIC_TABLETOPFORGE_API_URL="https://YOUR-APP-SERVICE-NAME.azurewebsites.net"
+```
+
+For GitHub Pages, `.github/workflows/deploy-pages.yml` sets this during the static build. Locally, add it to `.env.local` if you want to test the hosted backend from `npm run dev`.
+
+AI injects are optional in the session UI. If the OpenAI account has no credits, the backend is unavailable, or the access code is wrong, the frontend falls back to the built-in scenario twists so the exercise can keep running.
+
+The access code is a lightweight server gate, not a full user login system. It prevents casual public usage of the AI endpoint, but anyone you give the code to can make requests until you rotate it or lower the daily limit.
+
 ## GitHub Actions Publish Profile Deployment
 
 The repo includes `.github/workflows/deploy-backend-azure.yml`, which deploys only the `backend` folder.

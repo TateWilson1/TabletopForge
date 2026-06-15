@@ -34,6 +34,7 @@ jobs:
         run: npm run build:static
         env:
           NEXT_PUBLIC_BASE_PATH: /TabletopForge
+          NEXT_PUBLIC_TABLETOPFORGE_API_URL: https://tabletopforge-api-tw-c2audzbvfrg6dbh6.centralus-01.azurewebsites.net
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
