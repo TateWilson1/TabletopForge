@@ -10,7 +10,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 env:
   AZURE_WEBAPP_NAME: ${{ vars.AZURE_WEBAPP_NAME }}
@@ -35,13 +34,13 @@ jobs:
           cache-dependency-path: backend/package-lock.json
 
       - name: Install backend dependencies
-        run: npm ci
+        run: npm install
 
       - name: Build backend
-        run: npm run build
+        run: npm run build --if-present
 
       - name: Test backend
-        run: npm test
+        run: npm run test --if-present
 
       - name: Upload backend artifact
         uses: actions/upload-artifact@v4
@@ -61,18 +60,12 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: backend
-          path: backend
-
-      - name: Azure login
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          path: .
 
       - name: Deploy backend to Azure App Service
         id: deploy-to-azure
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ env.AZURE_WEBAPP_NAME }}
-          package: backend
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+          package: .

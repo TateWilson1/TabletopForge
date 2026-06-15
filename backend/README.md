@@ -127,7 +127,7 @@ After that, the static GitHub Pages frontend can call:
 https://YOUR-APP-SERVICE-NAME.azurewebsites.net/api/ai/generate-inject
 ```
 
-## GitHub Actions OIDC Deployment
+## GitHub Actions Publish Profile Deployment
 
 The repo includes `.github/workflows/deploy-backend-azure.yml`, which deploys only the `backend` folder.
 
@@ -137,12 +137,10 @@ Set this GitHub Actions variable:
 AZURE_WEBAPP_NAME
 ```
 
-Set these GitHub Actions secrets for Azure OIDC login:
+Set this GitHub Actions secret from the Azure App Service publish profile:
 
 ```txt
-AZURE_CLIENT_ID
-AZURE_TENANT_ID
-AZURE_SUBSCRIPTION_ID
+AZURE_WEBAPP_PUBLISH_PROFILE
 ```
 
 The Azure App Service application settings still need:
@@ -156,4 +154,4 @@ TABLETOPFORGE_AI_DAILY_LIMIT
 TABLETOPFORGE_ALLOWED_ORIGINS
 ```
 
-This GitHub Actions workflow avoids relying on Azure Deployment Center's GitHub source-control token setup.
+This GitHub Actions workflow avoids relying on Azure Deployment Center's GitHub source-control token setup and does not require `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, or `AZURE_SUBSCRIPTION_ID`.
