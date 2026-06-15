@@ -74,7 +74,7 @@ export function generateExercise(options: ExerciseOptions): GeneratedExercise {
     scenario: options.scenarioType,
     duration: options.exerciseDuration,
     maturityLevel: options.maturityLevel,
-    hasHumanFacilitator: options.hasHumanFacilitator,
+    hasHumanFacilitator: false,
     purpose: `Help ${organization} validate incident response roles, communications, evidence expectations, and decision authority for a ${options.scenarioType.toLowerCase()} scenario at a ${options.maturityLevel.toLowerCase()} maturity level.`,
   };
 
@@ -154,7 +154,7 @@ function createMarkdownReport(exercise: Omit<GeneratedExercise, "markdownReport"
     `- Scenario: ${exercise.overview.scenario}`,
     `- Duration: ${exercise.overview.duration}`,
     `- Maturity level: ${exercise.overview.maturityLevel}`,
-    `- Session mode: ${exercise.overview.hasHumanFacilitator ? "Human facilitator assisted" : "TabletopForge facilitated"}`,
+    "- Session mode: TabletopForge facilitated",
     `- Purpose: ${exercise.overview.purpose}`,
     "",
     "## Scenario Summary",

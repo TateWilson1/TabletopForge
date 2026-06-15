@@ -69,7 +69,7 @@ export function SessionRunner({ exerciseId }: { exerciseId: string | null }) {
       <div className="mb-5 flex flex-col gap-4 border-b border-border/70 pb-5 xl:flex-row xl:items-start xl:justify-between">
         <div>
           <div className="mb-3 flex flex-wrap gap-2">
-            <Badge variant="secondary">{exercise.overview.hasHumanFacilitator ? "Human facilitator assisted" : "TabletopForge facilitated"}</Badge>
+            <Badge variant="secondary">TabletopForge facilitated</Badge>
             <Badge variant="outline">{exercise.overview.duration}</Badge>
             <Badge variant="outline">{exercise.overview.maturityLevel}</Badge>
           </div>

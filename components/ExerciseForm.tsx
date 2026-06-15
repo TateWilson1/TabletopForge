@@ -3,7 +3,6 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { FileText, ShieldCheck, Wand2, X } from "lucide-react";
-import { ExerciseOutput } from "@/components/ExerciseOutput";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -22,7 +21,6 @@ import {
   organizationSizes,
   scenarioTypes,
   type ExerciseOptions,
-  type GeneratedExercise,
 } from "@/lib/types";
 
 const defaultOptions: ExerciseOptions = {
@@ -45,10 +43,10 @@ const defaultOptions: ExerciseOptions = {
 export function ExerciseForm() {
   const router = useRouter();
   const [options, setOptions] = useState<ExerciseOptions>(defaultOptions);
-  const [exercise, setExercise] = useState<GeneratedExercise | null>(null);
   const [error, setError] = useState("");
   const [savedNotice, setSavedNotice] = useState("");
   const [irpNotice, setIrpNotice] = useState("");
+  const [isGenerating, setIsGenerating] = useState(false);
 
   const canGenerate = useMemo(() => options.organizationName.trim().length >= 2, [options.organizationName]);
 
@@ -86,15 +84,15 @@ export function ExerciseForm() {
       return;
     }
 
-    const generated = generateExercise(options);
-    setExercise(generated);
+    const generated = generateExercise({ ...options, hasHumanFacilitator: false });
     saveExercise(generated);
     setSavedNotice("Exercise generated and saved in this browser.");
+    setIsGenerating(true);
     router.push(`/session?id=${encodeURIComponent(generated.id)}`);
   }
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[0.92fr_1.08fr]">
+    <div className="mx-auto max-w-3xl">
       <Card className="h-fit bg-card/80">
         <CardHeader>
           <div className="flex items-center justify-between gap-3">
@@ -234,17 +232,6 @@ export function ExerciseForm() {
 
           <div className="space-y-4">
             <ToggleRow
-              id="facilitator"
-              label="A human facilitator will run this exercise"
-              description={
-                options.hasHumanFacilitator
-                  ? "TabletopForge will give the facilitator scripts, prompts, and injects to use with the group."
-                  : "TabletopForge will act as the facilitator and speak directly to participants during the session."
-              }
-              checked={options.hasHumanFacilitator}
-              onCheckedChange={(checked) => updateOption("hasHumanFacilitator", checked)}
-            />
-            <ToggleRow
               id="executive"
               label="Include executive questions"
               checked={options.includeExecutiveQuestions}
@@ -273,14 +260,12 @@ export function ExerciseForm() {
           {error ? <p className="text-sm text-destructive">{error}</p> : null}
           {savedNotice ? <p className="text-sm text-primary">{savedNotice}</p> : null}
 
-          <Button className="w-full" size="lg" onClick={handleGenerate}>
+          <Button className="w-full" size="lg" onClick={handleGenerate} disabled={isGenerating}>
             <Wand2 className="size-4" suppressHydrationWarning />
-            Generate Tabletop Exercise
+            {isGenerating ? "Starting Session..." : "Generate And Start Session"}
           </Button>
         </CardContent>
       </Card>
-
-      <ExerciseOutput exercise={exercise} emptyTitle="Your generated exercise will appear here" />
     </div>
   );
 }

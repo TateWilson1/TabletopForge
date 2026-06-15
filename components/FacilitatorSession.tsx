@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Award,
   CheckCircle2,
@@ -9,12 +9,12 @@ import {
   Clock,
   Clipboard,
   ClipboardList,
+  Dices,
   Download,
   Lightbulb,
   ListTodo,
   Pause,
   Play,
-  Plus,
   RefreshCw,
   ShieldCheck,
   Sparkles,
@@ -66,62 +66,59 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
   const [activeIndex, setActiveIndex] = useState(0);
   const [revealedInjects, setRevealedInjects] = useState<RevealedInject[]>([]);
   const [decisionStatuses, setDecisionStatuses] = useState<Record<string, boolean>>({});
-  const [customInject, setCustomInject] = useState("");
   const [sessionNotes, setSessionNotes] = useState("");
   const [actionItems, setActionItems] = useState("");
   const [exportNotice, setExportNotice] = useState("");
   const [completedSession, setCompletedSession] = useState<CompletedSession | null>(null);
   const [isPaused, setIsPaused] = useState(false);
   const [completedSteps, setCompletedSteps] = useState<Record<string, boolean>>({});
-  const [skippedInjectIds, setSkippedInjectIds] = useState<string[]>([]);
   const [facilitatorHint, setFacilitatorHint] = useState("");
+  const [injectTimerSeconds, setInjectTimerSeconds] = useState(() => buildInjectTimerSeconds(steps[0]?.duration ?? "5 min"));
+  const [diceRoll, setDiceRoll] = useState<{ value: number; injectText: string } | null>(null);
 
   const activeStep = steps[activeIndex];
   const progress = Math.round(((activeIndex + 1) / steps.length) * 100);
-  const hasHumanFacilitator = exercise.overview.hasHumanFacilitator;
+  const hasHumanFacilitator = false;
   const activeRevealedInjects = revealedInjects.filter((inject) => inject.stepTitle === activeStep.title);
   const knownFacts = [...activeStep.knownFacts, ...activeRevealedInjects.map((inject) => inject.fact)];
   const unknowns = [...activeStep.unknowns, ...activeRevealedInjects.map((inject) => inject.unknown)];
-  const availableInjects = activeStep.injects.filter(
-    (inject) => !revealedInjects.some((revealed) => revealed.id === inject.id) && !skippedInjectIds.includes(inject.id),
+  const availableInjects = useMemo(
+    () => activeStep.injects.filter((inject) => !revealedInjects.some((revealed) => revealed.id === inject.id)),
+    [activeStep.injects, revealedInjects],
   );
 
-  function revealInject() {
+  useEffect(() => {
+    setInjectTimerSeconds(buildInjectTimerSeconds(activeStep.duration));
+    setDiceRoll(null);
+  }, [activeStep.duration, activeStep.title]);
+
+  useEffect(() => {
+    if (isPaused || availableInjects.length === 0 || injectTimerSeconds === 0) {
+      return;
+    }
+
+    const timerId = window.setInterval(() => {
+      setInjectTimerSeconds((current) => Math.max(0, current - 1));
+    }, 1000);
+
+    return () => window.clearInterval(timerId);
+  }, [availableInjects.length, injectTimerSeconds, isPaused]);
+
+  const revealInject = useCallback(() => {
     const nextInject = availableInjects[0];
 
     if (nextInject) {
       setRevealedInjects((current) => [...current, { ...nextInject, stepTitle: activeStep.title }]);
+      setDiceRoll({ value: buildDiceRoll(nextInject), injectText: nextInject.text });
+      setInjectTimerSeconds(availableInjects.length > 1 ? buildInjectTimerSeconds(activeStep.duration) : 0);
     }
-  }
+  }, [activeStep.duration, activeStep.title, availableInjects]);
 
-  function skipInject() {
-    const nextInject = availableInjects[0];
-
-    if (nextInject) {
-      setSkippedInjectIds((current) => [...current, nextInject.id]);
-      setExportNotice("Inject skipped. You can keep the discussion focused on the current situation.");
+  useEffect(() => {
+    if (!isPaused && injectTimerSeconds === 0 && availableInjects.length > 0) {
+      revealInject();
     }
-  }
-
-  function addCustomInject() {
-    const trimmed = customInject.trim();
-
-    if (!trimmed) {
-      return;
-    }
-
-    setRevealedInjects((current) => [
-      ...current,
-      {
-        id: `${activeStep.title}:custom:${Date.now()}`,
-        text: trimmed,
-        fact: trimmed,
-        unknown: "How does this new development change scope, impact, ownership, or communications?",
-        stepTitle: activeStep.title,
-      },
-    ]);
-    setCustomInject("");
-  }
+  }, [availableInjects.length, injectTimerSeconds, isPaused, revealInject]);
 
   function moveStep(direction: -1 | 1) {
     setActiveIndex((current) => Math.min(steps.length - 1, Math.max(0, current + direction)));
@@ -133,14 +130,14 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
     setRevealedInjects([]);
     setDecisionStatuses({});
     setCompletedSteps({});
-    setSkippedInjectIds([]);
     setFacilitatorHint("");
-    setCustomInject("");
+    setDiceRoll(null);
     setSessionNotes("");
     setActionItems("");
     setExportNotice("");
     setCompletedSession(null);
     setIsPaused(false);
+    setInjectTimerSeconds(buildInjectTimerSeconds(steps[0]?.duration ?? "5 min"));
   }
 
   function toggleDecision(decision: string, checked: boolean) {
@@ -193,7 +190,7 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
           <CardHeader>
             <div className="flex items-center justify-between gap-3">
               <CardTitle className="text-lg">Session Flow</CardTitle>
-              <Badge variant="outline">{hasHumanFacilitator ? "Human-led" : "App-led"}</Badge>
+              <Badge variant="outline">App-led</Badge>
             </div>
             <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted">
               <div className="h-full bg-primary transition-all" style={{ width: `${progress}%` }} />
@@ -270,7 +267,7 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
             <section className="rounded-md border border-primary/30 bg-primary/10 p-4">
               <div className="mb-2 flex items-center gap-2 text-sm font-medium text-primary">
                 <Sparkles className="size-4" suppressHydrationWarning />
-                {hasHumanFacilitator ? "Facilitator Script" : "TabletopForge Facilitator"}
+                TabletopForge Facilitator
               </div>
               <p className="leading-7 text-muted-foreground">{activeStep.facilitatorScript}</p>
             </section>
@@ -284,9 +281,7 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
 
             {activeStep.scenarioBrief ? (
               <section className="rounded-md border border-border bg-background/55 p-4">
-                <div className="mb-2 text-sm font-medium text-foreground">
-                  {hasHumanFacilitator ? "Read Aloud Scenario" : "Current Situation"}
-                </div>
+                <div className="mb-2 text-sm font-medium text-foreground">Current Situation</div>
                 <p className="leading-7 text-muted-foreground">{activeStep.scenarioBrief}</p>
               </section>
             ) : null}
@@ -300,7 +295,7 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
               onToggleDecision={toggleDecision}
             />
 
-            <PromptList title={hasHumanFacilitator ? "Ask The Room" : "Discuss This Now"} items={activeStep.prompts} />
+            <PromptList title="Discuss This Now" items={activeStep.prompts} />
 
             <section className="space-y-3 rounded-md border border-border bg-background/45 p-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -325,21 +320,32 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <h3 className="font-semibold">Injects</h3>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    {hasHumanFacilitator
-                      ? "Reveal a new development when discussion slows or when the team needs pressure."
-                      : "Use this when the team is ready for the situation to evolve."}
-                  </p>
+                  <p className="mt-1 text-sm text-muted-foreground">The next development will arrive when the timer ends, or you can roll now.</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <Button onClick={revealInject} disabled={availableInjects.length === 0}>
-                    <Sparkles className="size-4" suppressHydrationWarning />
-                    {hasHumanFacilitator ? "Reveal Inject" : "Reveal Next Development"}
-                  </Button>
-                  <Button variant="outline" onClick={skipInject} disabled={availableInjects.length === 0}>
-                    Skip Inject
+                    <Dices className="size-4" suppressHydrationWarning />
+                    Roll Now
                   </Button>
                 </div>
+              </div>
+
+              <div className="rounded-md border border-border bg-background/45 p-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm font-medium">Next Inject</p>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      {availableInjects.length > 0 ? `Arrives in ${formatSeconds(injectTimerSeconds)}.` : "No more injects for this section."}
+                    </p>
+                  </div>
+                  {diceRoll ? (
+                    <div className="rounded-md border border-primary/35 bg-primary/10 px-4 py-3 text-center animate-pulse">
+                      <p className="text-xs uppercase text-muted-foreground">d20 roll</p>
+                      <p className="text-3xl font-semibold text-primary">{diceRoll.value}</p>
+                    </div>
+                  ) : null}
+                </div>
+                {diceRoll ? <p className="mt-3 text-sm leading-6 text-muted-foreground">Roll {diceRoll.value} triggered: {diceRoll.injectText}</p> : null}
               </div>
 
               <div className="space-y-2">
@@ -355,23 +361,6 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
                     No injects revealed yet.
                   </div>
                 )}
-              </div>
-
-              <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
-                <Textarea
-                  value={customInject}
-                  onChange={(event) => setCustomInject(event.target.value)}
-                  placeholder={
-                    hasHumanFacilitator
-                      ? "Add your own inject, such as: The CEO asks whether customers need to be notified by end of day."
-                      : "Add a live development for TabletopForge to present, such as: The CEO asks whether customers need to be notified by end of day."
-                  }
-                  className="min-h-[88px]"
-                />
-                <Button variant="secondary" onClick={addCustomInject} className="sm:self-start">
-                  <Plus className="size-4" suppressHydrationWarning />
-                  Add Live Inject
-                </Button>
               </div>
             </section>
 
@@ -404,7 +393,7 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
             <div>
               <CardTitle className="flex items-center gap-2 text-lg">
                 <ClipboardList className="size-5 text-primary" suppressHydrationWarning />
-                {hasHumanFacilitator ? "Facilitator Notes" : "Session Notes"}
+                Session Notes
               </CardTitle>
               {exportNotice ? <p className="mt-2 text-sm text-primary">{exportNotice}</p> : null}
             </div>
@@ -427,9 +416,7 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
               value={sessionNotes}
               onChange={(event) => setSessionNotes(event.target.value)}
               placeholder={
-                hasHumanFacilitator
-                  ? "Capture unclear answers, ownership questions, timeline issues, and communication gaps."
-                  : "Capture what the group says, unclear answers, ownership questions, and communication gaps."
+                "Capture what the group says, unclear answers, ownership questions, and communication gaps."
               }
               className="min-h-[180px]"
             />
@@ -650,7 +637,7 @@ function Scorecard({ session }: { session: CompletedSession }) {
 function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
   const focusGaps = exercise.irpAnalysis?.findings.filter((finding) => finding.status !== "found").slice(0, 3) ?? [];
   const gapPrompts = focusGaps.map((finding) => `The IRP scan flagged ${finding.label.toLowerCase()}. How would the team handle that gap during this incident?`);
-  const hasHumanFacilitator = exercise.overview.hasHumanFacilitator;
+  const hasHumanFacilitator = false;
   const schedule = buildStepSchedule(exercise.overview.duration);
   const pressureProfile = buildPressureProfile(exercise.overview.maturityLevel);
   const maturityAdditions = buildMaturityAdditions(exercise.overview.maturityLevel);
@@ -1172,6 +1159,22 @@ function nextSeed(seed: number) {
   return (Math.imul(seed, 1664525) + 1013904223) >>> 0;
 }
 
+function buildInjectTimerSeconds(duration: string) {
+  const minutes = Number.parseInt(duration, 10);
+  const baseSeconds = Number.isFinite(minutes) ? Math.round((minutes * 60) / 3) : 90;
+  return Math.max(45, Math.min(300, baseSeconds));
+}
+
+function buildDiceRoll(inject: Inject) {
+  return (hashSeed(inject.id) % 20) + 1;
+}
+
+function formatSeconds(totalSeconds: number) {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
 function decisionKey(stepTitle: string, decision: string) {
   return `${stepTitle}:${decision}`;
 }
@@ -1191,7 +1194,7 @@ function buildSessionSummary(
     "",
     "## Live Session Summary",
     `- Session exported: ${new Date().toISOString()}`,
-    `- Session mode: ${exercise.overview.hasHumanFacilitator ? "Human facilitator assisted" : "TabletopForge facilitated"}`,
+    "- Session mode: TabletopForge facilitated",
     "",
     "### Revealed Injects",
   ];
