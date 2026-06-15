@@ -23,7 +23,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { buildCompletedSessionHtmlReport, downloadTextFile, safeFilename } from "@/lib/report-export";
 import { saveCompletedSession } from "@/lib/storage";
@@ -83,7 +82,6 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
 
   const activeStep = steps[activeIndex];
   const progress = Math.round(((activeIndex + 1) / steps.length) * 100);
-  const hasHumanFacilitator = false;
   const activeRevealedInjects = revealedInjects.filter((inject) => inject.stepTitle === activeStep.title);
   const knownFacts = [...activeStep.knownFacts, ...activeRevealedInjects.map((inject) => inject.fact)];
   const unknowns = [...activeStep.unknowns, ...activeRevealedInjects.map((inject) => inject.unknown)];
@@ -152,7 +150,7 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
       setRevealedInjects((current) =>
         current.some((inject) => inject.id === nextInject.id) ? current : [...current, { ...nextInject, stepTitle: activeStep.title }],
       );
-      setDiceRoll({ value: buildDiceRoll(nextInject), injectText: nextInject.text });
+      setDiceRoll({ value: finalValue, injectText: nextInject.text });
       setInjectTimerSeconds(availableInjects.length > 1 ? buildInjectTimerSeconds(activeStep.duration) : 0);
       setIsRollingDice(false);
     }, 900);
@@ -242,6 +240,13 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
 
   return (
     <div className="space-y-6">
+      <InjectOverlay
+        diceRoll={diceRoll}
+        isRolling={isRollingDice}
+        rollingValue={rollingValue}
+        onDismiss={() => setDiceRoll(null)}
+      />
+
       <div className="grid gap-4 xl:grid-cols-[0.74fr_1.26fr]">
         <Card className="bg-background/45">
           <CardHeader>
@@ -369,7 +374,7 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
                     <p className="mt-1 text-sm leading-6 text-muted-foreground">Use this after the group has discussed the prompts and key decisions.</p>
                   </div>
                 </div>
-                <Button variant="outline" onClick={() => setFacilitatorHint(buildStuckHint(activeStep, hasHumanFacilitator))}>
+                <Button variant="outline" onClick={() => setFacilitatorHint(buildStuckHint(activeStep))}>
                   <Lightbulb className="size-4" suppressHydrationWarning />
                   The team is stuck
                 </Button>
@@ -377,53 +382,20 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
               {facilitatorHint ? <p className="rounded-md bg-muted p-3 text-sm leading-6 text-muted-foreground">{facilitatorHint}</p> : null}
             </section>
 
-            <Separator />
-
-            <section className="space-y-4">
+            <section className="rounded-md border border-accent/35 bg-accent/10 p-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <h3 className="font-semibold">Injects</h3>
-                  <p className="mt-1 text-sm text-muted-foreground">The next development will arrive when the timer ends, or you can roll now.</p>
+                  <h3 className="font-semibold">Scenario Evolution</h3>
+                  <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                    {availableInjects.length > 0
+                      ? `The next twist drops in ${formatSeconds(injectTimerSeconds)}. Roll now if the room is ready for pressure.`
+                      : "No more twists are queued for this section."}
+                  </p>
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  <Button onClick={triggerInjectRoll} disabled={availableInjects.length === 0 || isRollingDice}>
-                    <Dices className="size-4" suppressHydrationWarning />
-                    {isRollingDice ? "Rolling..." : "Roll Now"}
-                  </Button>
-                </div>
-              </div>
-
-              <div className="rounded-md border border-border bg-background/45 p-4">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <p className="text-sm font-medium">Next Inject</p>
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      {availableInjects.length > 0 ? `Arrives in ${formatSeconds(injectTimerSeconds)}.` : "No more injects for this section."}
-                    </p>
-                  </div>
-                  {isRollingDice || diceRoll ? (
-                    <div className={`rounded-md border border-primary/35 bg-primary/10 px-4 py-3 text-center ${isRollingDice ? "animate-bounce" : "animate-pulse"}`}>
-                      <p className="text-xs uppercase text-muted-foreground">d20 roll</p>
-                      <p className="text-3xl font-semibold text-primary">{isRollingDice ? rollingValue : diceRoll?.value}</p>
-                    </div>
-                  ) : null}
-                </div>
-                {diceRoll ? <p className="mt-3 text-sm leading-6 text-muted-foreground">Roll {diceRoll.value} triggered: {diceRoll.injectText}</p> : null}
-              </div>
-
-              <div className="space-y-2">
-                {activeRevealedInjects.length > 0 ? (
-                  activeRevealedInjects.map((inject, index) => (
-                    <div key={inject.id} className="rounded-md border border-accent/40 bg-accent/10 p-3 text-sm leading-6">
-                      <span className="font-medium text-accent">Inject {index + 1}: </span>
-                      <span className="text-muted-foreground">{inject.text}</span>
-                    </div>
-                  ))
-                ) : (
-                  <div className="rounded-md border border-border bg-background/45 p-3 text-sm text-muted-foreground">
-                    No injects revealed yet.
-                  </div>
-                )}
+                <Button onClick={triggerInjectRoll} disabled={availableInjects.length === 0 || isRollingDice}>
+                  <Dices className="size-4" suppressHydrationWarning />
+                  {isRollingDice ? "Rolling..." : "Roll Now"}
+                </Button>
               </div>
             </section>
 
@@ -539,6 +511,60 @@ function PromptCard({
   );
 }
 
+function InjectOverlay({
+  diceRoll,
+  isRolling,
+  rollingValue,
+  onDismiss,
+}: {
+  diceRoll: { value: number; injectText: string } | null;
+  isRolling: boolean;
+  rollingValue: number;
+  onDismiss: () => void;
+}) {
+  if (!isRolling && !diceRoll) {
+    return null;
+  }
+
+  const displayedValue = isRolling ? rollingValue : diceRoll?.value;
+
+  return (
+    <div className="fixed inset-0 z-50 flex min-h-screen items-center justify-center bg-background/95 px-4 py-8 backdrop-blur-md">
+      <div className="w-full max-w-3xl text-center">
+        <Badge variant="secondary" className="mb-4 border-accent/50 bg-accent/20 text-accent">
+          Scenario Evolved
+        </Badge>
+        <h2 className="text-3xl font-semibold text-foreground sm:text-5xl">Oh no. The situation changed.</h2>
+        <p className="mx-auto mt-4 max-w-2xl text-base leading-7 text-muted-foreground">
+          The group has to react to the new information before moving on.
+        </p>
+
+        <div className="my-8 flex justify-center">
+          <div className={`dice-roll-face flex size-48 flex-col items-center justify-center rounded-2xl border border-accent/60 bg-accent/15 shadow-2xl shadow-accent/20 sm:size-64 ${isRolling ? "" : "dice-roll-landed"}`}>
+            <Dices className="mb-3 size-14 text-accent sm:size-20" suppressHydrationWarning />
+            <p className="text-xs font-semibold uppercase text-muted-foreground">d20 roll</p>
+            <p className="text-7xl font-semibold text-accent sm:text-8xl">{displayedValue}</p>
+          </div>
+        </div>
+
+        {isRolling ? (
+          <p className="text-lg font-medium text-foreground">Rolling the next development...</p>
+        ) : (
+          <div className="mx-auto max-w-2xl space-y-5">
+            <div className="rounded-md border border-primary/35 bg-primary/10 p-5 text-left">
+              <p className="text-sm font-semibold text-primary">New information</p>
+              <p className="mt-2 text-lg leading-8 text-foreground">{diceRoll?.injectText}</p>
+            </div>
+            <Button size="lg" onClick={onDismiss}>
+              Return To Discussion
+            </Button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function TriageBoard({
   knownFacts,
   unknowns,
@@ -619,12 +645,11 @@ function DecisionList({
   );
 }
 
-function buildStuckHint(step: FacilitatorStep, hasHumanFacilitator: boolean) {
+function buildStuckHint(step: FacilitatorStep) {
   const firstDecision = step.decisions[0] ?? "the next decision";
   const firstUnknown = step.unknowns[0] ?? "the most important unknown";
-  const voice = hasHumanFacilitator ? "Ask the room" : "Pause and discuss";
 
-  return `${voice}: "What do we know, what do we still need, and who is allowed to decide ${firstDecision.toLowerCase()}?" If the team still stalls, capture "${firstUnknown}" as an unresolved unknown and move to the next decision.`;
+  return `Pause and discuss: "What do we know, what do we still need, and who is allowed to decide ${firstDecision.toLowerCase()}?" If the team still stalls, capture "${firstUnknown}" as an unresolved unknown and move to the next decision.`;
 }
 
 function Scorecard({ session }: { session: CompletedSession }) {
@@ -725,7 +750,6 @@ function Scorecard({ session }: { session: CompletedSession }) {
 function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
   const focusGaps = exercise.irpAnalysis?.findings.filter((finding) => finding.status !== "found").slice(0, 3) ?? [];
   const gapPrompts = focusGaps.map((finding) => `The IRP scan flagged ${finding.label.toLowerCase()}. How would the team handle that gap during this incident?`);
-  const hasHumanFacilitator = false;
   const schedule = buildStepSchedule(exercise.overview.duration);
   const pressureProfile = buildPressureProfile(exercise.overview.maturityLevel);
   const maturityAdditions = buildMaturityAdditions(exercise.overview.maturityLevel);
@@ -738,9 +762,7 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
       duration: schedule.kickoff,
       pressure: pressureProfile.kickoff,
       pressureNote: `${schedule.kickoff} suggested. Use this stage to establish roles and scope before the scenario pressure starts.`,
-      facilitatorScript: hasHumanFacilitator
-        ? `Start by reminding the group that this is a no-fault discussion for ${exercise.overview.organization}. The goal is to test decision-making, ownership, and the IRP, not to prove technical expertise.`
-        : `Welcome to the ${exercise.overview.organization} tabletop exercise. This is a no-fault discussion. Your goal is to talk through decisions, ownership, communications, and IRP gaps. Assign one person to read responses aloud and one person to capture notes before moving on.`,
+      facilitatorScript: `Welcome to the ${exercise.overview.organization} tabletop exercise. This is a no-fault discussion. Your goal is to talk through decisions, ownership, communications, and IRP gaps. Assign one person to capture notes before moving on.`,
       prompts: [
         "Who is participating today, and what role are they representing?",
         "Who will capture decisions, unclear answers, and action items?",
@@ -758,7 +780,6 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
         "Which systems, teams, or business processes are out of scope today.",
       ],
       decisions: [
-        "Who is the facilitator?",
         "Who owns note taking?",
         "What is in scope for today's discussion?",
         ...maturityAdditions.kickoffDecisions,
@@ -776,9 +797,7 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
       duration: schedule.initial,
       pressure: pressureProfile.initial,
       pressureNote: `${schedule.initial} suggested. The team should triage at a pace that matches the selected maturity level.`,
-      facilitatorScript: hasHumanFacilitator
-        ? `Read the scenario aloud, then ask the group to describe the first 15 minutes of response. Keep pulling the conversation back to who owns each action and where it is written down.`
-        : `Read the scenario below as if it just happened. Discuss the first 15 minutes of response. Do not jump straight to technical fixes. Name who receives the report, who owns each action, and where the IRP supports that answer.`,
+      facilitatorScript: `Read the scenario below as if it just happened. Discuss the first 15 minutes of response. Do not jump straight to technical fixes. Name who receives the report, who owns each action, and where the IRP supports that answer.`,
       scenarioBrief: exercise.scenarioSummary,
       prompts: [
         ...exercise.discussionQuestions.slice(0, 4),
@@ -810,9 +829,7 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
       duration: schedule.containment,
       pressure: pressureProfile.containment,
       pressureNote: `${schedule.containment} suggested. Containment choices may create business impact, so decisions should become sharper here.`,
-      facilitatorScript: hasHumanFacilitator
-        ? "Increase pressure slightly. Ask what the team can do immediately, what needs approval, and what business risk each containment choice creates."
-        : "The situation is getting more serious. Before you reveal another development, decide what the team can do immediately, what requires approval, and what business risk each containment choice creates.",
+      facilitatorScript: "The situation is getting more serious. Before you reveal another development, decide what the team can do immediately, what requires approval, and what business risk each containment choice creates.",
       prompts: [
         ...exercise.discussionQuestions.slice(4, 8),
         ...exercise.gapDiscoveryQuestions.slice(0, 3),
@@ -844,9 +861,7 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
       duration: schedule.communications,
       pressure: pressureProfile.communications,
       pressureNote: `${schedule.communications} suggested. Pressure is highest here because leadership, legal, and stakeholder messaging can diverge quickly.`,
-      facilitatorScript: hasHumanFacilitator
-        ? "Shift to communication, leadership updates, legal/compliance involvement, and stakeholder expectations. Ask the group to avoid vague answers like 'we would notify people' and name the audience, owner, and message."
-        : "Now focus on communications and impact. Avoid vague answers like 'we would notify people.' Name the audience, message owner, approval path, and what facts are confirmed before any update is sent.",
+      facilitatorScript: "Now focus on communications and impact. Avoid vague answers like 'we would notify people.' Name the audience, message owner, approval path, and what facts are confirmed before any update is sent.",
       prompts: [
         ...exercise.discussionQuestions.slice(8, 12),
         ...exercise.gapDiscoveryQuestions.slice(3, 7),
@@ -883,9 +898,7 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
       duration: schedule.recovery,
       pressure: "Recovery",
       pressureNote: `${schedule.recovery} suggested. Shift from urgent response to ownership, follow-through, and proof that gaps will be fixed.`,
-      facilitatorScript: hasHumanFacilitator
-        ? "Close by turning gaps into improvements. Every unclear answer should become an action item with an owner, due date, and priority."
-        : "Close the exercise by turning every unclear answer into an improvement item. Do not leave this section until each major gap has an owner, due date, and priority.",
+      facilitatorScript: "Close the exercise by turning every unclear answer into an improvement item. Do not leave this section until each major gap has an owner, due date, and priority.",
       prompts: [
         ...exercise.gapDiscoveryQuestions.slice(7, 12),
         "What slowed the response in this discussion?",
@@ -910,7 +923,7 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
         ...maturityAdditions.recoveryDecisions,
       ],
       injects: buildInjects(exercise, "recovery", [
-        "The facilitator asks each participant to name one thing they would change in the IRP.",
+        "TabletopForge asks each participant to name one thing they would change in the IRP.",
         "Leadership wants the top three improvement items by tomorrow morning.",
         "A participant says the team should rerun this exercise after updates are complete.",
         "The team realizes one action item depends on another department that was not represented.",
@@ -1002,16 +1015,28 @@ function buildInjectCount(maturity: GeneratedExercise["overview"]["maturityLevel
 function buildMaturityAdditions(maturity: GeneratedExercise["overview"]["maturityLevel"]) {
   if (maturity === "Basic") {
     return {
-      kickoffPrompts: ["What would make this exercise feel successful and practical for the team?"],
-      initialPrompts: ["What is the simplest first step the team can agree on?"],
-      containmentPrompts: ["What action can reduce risk without creating unnecessary disruption?"],
-      communicationsPrompts: ["Who needs a plain-language update first?"],
-      recoveryPrompts: ["What one improvement should be fixed first after the exercise?"],
+      kickoffPrompts: ["In plain language, what should everyone know before the scenario begins?"],
+      initialPrompts: [
+        "What would a non-technical employee notice, and who should they tell first?",
+        "What is the simplest first step the team can agree on?",
+      ],
+      containmentPrompts: [
+        "What simple action can reduce risk while the team waits for more details?",
+        "Who can explain the business impact if a system, account, or service has to be paused?",
+      ],
+      communicationsPrompts: [
+        "Who needs a plain-language update first?",
+        "How would you explain this to leadership without technical terms?",
+      ],
+      recoveryPrompts: [
+        "What one practical improvement would make this easier next time?",
+        "What should be written down so a new employee could follow it?",
+      ],
       kickoffDecisions: [],
-      initialDecisions: [],
-      containmentDecisions: [],
-      communicationsDecisions: [],
-      recoveryDecisions: [],
+      initialDecisions: ["Who is the first person or team to call?"],
+      containmentDecisions: ["What basic step is safe to take now?"],
+      communicationsDecisions: ["What plain-language message should staff receive?"],
+      recoveryDecisions: ["What practical fix should be done first?"],
     };
   }
 

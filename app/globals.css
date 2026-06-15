@@ -47,3 +47,36 @@ body {
     linear-gradient(90deg, rgba(255, 255, 255, 0.045) 1px, transparent 1px);
   background-size: 42px 42px;
 }
+
+.dice-roll-face {
+  animation: dice-cast 0.18s ease-in-out infinite alternate;
+  transform-origin: center;
+}
+
+.dice-roll-landed {
+  animation: dice-land 0.42s ease-out both;
+}
+
+@keyframes dice-cast {
+  from {
+    transform: rotate(-8deg) translateY(0) scale(0.98);
+  }
+
+  to {
+    transform: rotate(8deg) translateY(-10px) scale(1.04);
+  }
+}
+
+@keyframes dice-land {
+  0% {
+    transform: rotate(12deg) translateY(-18px) scale(1.08);
+  }
+
+  65% {
+    transform: rotate(-4deg) translateY(4px) scale(0.98);
+  }
+
+  100% {
+    transform: rotate(0) translateY(0) scale(1);
+  }
+}

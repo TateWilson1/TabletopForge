@@ -295,13 +295,21 @@ function SelectField<T extends string>({
         <SelectContent>
           {values.map((item) => (
             <SelectItem key={item} value={item}>
-              {item}
+              {formatSelectLabel(item)}
             </SelectItem>
           ))}
         </SelectContent>
       </Select>
     </div>
   );
+}
+
+function formatSelectLabel(value: string) {
+  if (value === "Basic") {
+    return "Basic (plain-language)";
+  }
+
+  return value;
 }
 
 function RequiredMark() {
