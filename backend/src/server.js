@@ -34,6 +34,11 @@ const dailyUsage = {
   day: getCurrentDay(),
   count: 0,
 };
+let databaseBootstrapStatus = {
+  attempted: false,
+  ok: false,
+  error: "",
+};
 
 app.post("/api/billing/stripe-webhook", express.raw({ type: "application/json" }), async (request, response) => {
   try {
@@ -62,11 +67,16 @@ app.use(
   }),
 );
 
-app.get("/health", (_request, response) => {
+app.get("/health", async (request, response) => {
+  const includeDeepCheck = request.query.deep === "1";
+  const database = includeDeepCheck ? await checkDatabaseHealth() : undefined;
+
   response.json({
     ok: true,
     service: "tabletopforge-backend",
     databaseConfigured: Boolean(pool),
+    database,
+    databaseBootstrap: databaseBootstrapStatus,
     stripeConfigured: Boolean(stripe),
     authDeliveryMode: getAuthDeliveryMode(),
   });
@@ -610,6 +620,8 @@ async function ensureSaasSchema() {
     return;
   }
 
+  databaseBootstrapStatus = { attempted: true, ok: false, error: "" };
+
   const statements = [
     `CREATE TABLE IF NOT EXISTS "users" (
       "id" UUID NOT NULL,
@@ -777,8 +789,23 @@ async function ensureSaasSchema() {
     for (const statement of statements) {
       await pool.query(statement);
     }
+    databaseBootstrapStatus = { attempted: true, ok: true, error: "" };
   } catch (error) {
+    databaseBootstrapStatus = { attempted: true, ok: false, error: getSafeErrorMessage(error) };
     console.error("Database bootstrap failed. Account endpoints may be unavailable until migrations run.", error);
+  }
+}
+
+async function checkDatabaseHealth() {
+  if (!pool) {
+    return { ok: false, error: "DATABASE_URL is not configured." };
+  }
+
+  try {
+    await pool.query("SELECT 1");
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: getSafeErrorMessage(error) };
   }
 }
 
@@ -977,6 +1004,15 @@ function sendAuthError(response, error) {
 }
 
 function sendApiError(response, error, fallbackMessage) {
+  console.error(fallbackMessage, error);
   const statusCode = error.statusCode || 500;
   response.status(statusCode).json({ error: statusCode === 500 ? fallbackMessage : error.message });
+}
+
+function getSafeErrorMessage(error) {
+  if (!(error instanceof Error)) {
+    return "Unknown database error.";
+  }
+
+  return `${error.name}: ${error.message}`.slice(0, 300);
 }
