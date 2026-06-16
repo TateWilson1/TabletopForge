@@ -140,10 +140,12 @@ app.post("/api/auth/verify-code", async (request, response) => {
     await dbQuery(`UPDATE "login_codes" SET "usedAt" = NOW() WHERE "id" = $1`, [loginCode.id]);
 
     const session = await createSession(user.id);
+    const signedInUser = await getUserById(user.id);
     response.json({
       token: session.token,
       expiresAt: session.expiresAt.toISOString(),
-      user: publicUser(await getUserById(user.id)),
+      user: publicUser(signedInUser),
+      entitlements: buildEntitlements(signedInUser),
     });
   } catch (error) {
     sendApiError(response, error, "Could not verify sign in.");

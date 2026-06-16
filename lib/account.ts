@@ -36,6 +36,27 @@ export interface LoginCodeResponse {
   message: string;
 }
 
+export function normalizeAccountState(account: Partial<AccountState> | null | undefined): AccountState | null {
+  if (!account?.user) {
+    return null;
+  }
+
+  return {
+    user: account.user,
+    entitlements: account.entitlements ?? {
+      canGenerate:
+        account.user.subscriptionStatus === "active" ||
+        account.user.subscriptionStatus === "trialing" ||
+        account.user.generationCredits > 0 ||
+        account.user.freeGenerationsRemaining > 0,
+      freeGenerationsRemaining: account.user.freeGenerationsRemaining ?? 0,
+      generationCredits: account.user.generationCredits ?? 0,
+      subscriptionStatus: account.user.subscriptionStatus ?? "none",
+      billingPlan: account.user.billingPlan ?? "free",
+    },
+  };
+}
+
 export function isAccountApiConfigured() {
   return API_URL.length > 0;
 }
@@ -69,11 +90,22 @@ export async function verifyLoginCode(email: string, code: string): Promise<Acco
     body: JSON.stringify({ email, code }),
   });
   storeSessionToken(result.token);
-  return result;
+  const normalized = normalizeAccountState(result);
+  if (!normalized) {
+    throw new Error("Account response was incomplete.");
+  }
+
+  return { ...result, ...normalized };
 }
 
 export async function fetchAccount(): Promise<AccountState> {
-  return apiFetch("/api/me", { method: "GET", auth: true });
+  const result = await apiFetch<AccountState>("/api/me", { method: "GET", auth: true });
+  const normalized = normalizeAccountState(result);
+  if (!normalized) {
+    throw new Error("Account response was incomplete.");
+  }
+
+  return normalized;
 }
 
 export async function signOut() {
