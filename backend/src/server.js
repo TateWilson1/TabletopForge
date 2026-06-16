@@ -1347,10 +1347,14 @@ function buildPromptPayload(body) {
     task: "Generate one new scenario inject for the current tabletop step.",
     constraints: [
       "Keep it realistic for the selected industry, organization size, maturity, and scenario.",
+      "Use the IRP findings to pressure-test weak or missing plan areas when provided.",
+      "For Basic maturity, use plain language and helpful handholding.",
+      "For Intermediate maturity, mix practical business decisions with moderate technical context.",
+      "For Advanced maturity, create sharper pressure around authority, evidence, legal/compliance, communications, and business continuity gaps.",
+      "Reflect organization size: small teams have coverage and vendor-dependency problems, while enterprise teams have coordination and authority problems.",
       "Do not repeat prior injects.",
       "Do not provide malware, exploit, credential theft, evasion, or persistence instructions.",
       "Do not ask users to reveal passwords, secrets, API keys, private keys, tokens, or live credentials.",
-      "Use plain language for Basic maturity.",
       "Return only the required JSON object.",
     ],
     exercise: {
@@ -1363,6 +1367,7 @@ function buildPromptPayload(body) {
       summary: asLimitedString(body.exercise.summary, 2000),
       objectives: asStringArray(body.exercise.objectives, 12),
     },
+    irpAnalysis: buildAssistIrpContext(body.irpAnalysis),
     currentStep: {
       title: asShortString(body.currentStep.title),
       knownFacts: asStringArray(body.currentStep.knownFacts, 12),

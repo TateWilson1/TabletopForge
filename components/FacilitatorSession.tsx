@@ -80,10 +80,11 @@ interface AiAssistResponse {
   missingInfo?: string[];
 }
 
-type FocusStageId = "brief" | "facts" | "decision" | "question" | "capture";
+type FocusStageId = "brief" | "updates" | "facts" | "decision" | "question" | "capture";
 
 const focusStages: Array<{ id: FocusStageId; label: string }> = [
   { id: "brief", label: "Situation" },
+  { id: "updates", label: "Updates" },
   { id: "facts", label: "Knowns" },
   { id: "decision", label: "Decision" },
   { id: "question", label: "Discuss" },
@@ -477,7 +478,7 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
               </section>
             ) : null}
 
-            <FocusStepper activeIndex={activeFocusIndex} onSelect={setActiveFocusIndex} />
+            <FocusStepper activeIndex={activeFocusIndex} injectCount={revealedInjects.length} onSelect={setActiveFocusIndex} />
 
             <AssistantPanel
               question={assistantQuestion}
@@ -513,6 +514,14 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
                   <ReadingText text={activeStep.pressureNote} className="mt-1 text-sm leading-6 text-muted-foreground" speed={30} />
                 </div>
               </section>
+            ) : null}
+
+            {activeFocus.id === "updates" ? (
+              <ScenarioUpdates
+                activeStepTitle={activeStep.title}
+                activeRevealedInjects={activeRevealedInjects}
+                revealedInjects={revealedInjects}
+              />
             ) : null}
 
             {activeFocus.id === "facts" ? <TriageFacts knownFacts={knownFacts} unknowns={unknowns} /> : null}
@@ -658,9 +667,11 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
 
 function FocusStepper({
   activeIndex,
+  injectCount,
   onSelect,
 }: {
   activeIndex: number;
+  injectCount: number;
   onSelect: (index: number) => void;
 }) {
   return (
@@ -678,10 +689,80 @@ function FocusStepper({
           >
             <span className="mr-2 text-xs">{index + 1}</span>
             {stage.label}
+            {stage.id === "updates" && injectCount > 0 ? (
+              <Badge variant="secondary" className="ml-2 px-1.5 py-0 text-[10px]">
+                {injectCount}
+              </Badge>
+            ) : null}
           </button>
         ))}
       </div>
     </section>
+  );
+}
+
+function ScenarioUpdates({
+  activeStepTitle,
+  activeRevealedInjects,
+  revealedInjects,
+}: {
+  activeStepTitle: string;
+  activeRevealedInjects: RevealedInject[];
+  revealedInjects: RevealedInject[];
+}) {
+  const earlierInjects = revealedInjects.filter((inject) => inject.stepTitle !== activeStepTitle);
+
+  return (
+    <section className="space-y-4 rounded-md border border-accent/35 bg-accent/10 p-5">
+      <div>
+        <h3 className="font-semibold">Scenario Updates</h3>
+        <p className="mt-1 text-sm leading-6 text-muted-foreground">
+          Re-read the situation changes here when the discussion questions need more context.
+        </p>
+      </div>
+
+      {revealedInjects.length === 0 ? (
+        <div className="rounded-md border border-border/70 bg-background/45 p-4">
+          <p className="text-sm leading-6 text-muted-foreground">
+            No scenario updates have dropped yet. Continue the discussion and TabletopForge will introduce new developments when the timing feels right.
+          </p>
+        </div>
+      ) : null}
+
+      {activeRevealedInjects.length > 0 ? (
+        <div className="space-y-3">
+          <h4 className="text-sm font-semibold text-foreground">Current Section</h4>
+          {activeRevealedInjects.map((inject, index) => (
+            <ScenarioUpdateCard key={inject.id} inject={inject} index={index} />
+          ))}
+        </div>
+      ) : null}
+
+      {earlierInjects.length > 0 ? (
+        <div className="space-y-3">
+          <h4 className="text-sm font-semibold text-foreground">Earlier Updates</h4>
+          {earlierInjects.map((inject, index) => (
+            <ScenarioUpdateCard key={inject.id} inject={inject} index={index} />
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function ScenarioUpdateCard({ inject, index }: { inject: RevealedInject; index: number }) {
+  return (
+    <div
+      className="session-list-item rounded-md border border-border/70 bg-background/50 p-4"
+      style={{ animationDelay: `${Math.min(index * 70, 420)}ms` }}
+    >
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <Badge variant="secondary">{inject.stepTitle}</Badge>
+        <Badge variant="outline">Update</Badge>
+      </div>
+      <ReadingText text={inject.text} className="text-sm leading-6 text-foreground" speed={20} />
+      <p className="mt-3 text-sm leading-6 text-muted-foreground">{inject.unknown}</p>
+    </div>
   );
 }
 
@@ -1012,6 +1093,13 @@ async function requestAiInject({
         summary: exercise.scenarioSummary,
         objectives: exercise.objectives,
       },
+      irpAnalysis: exercise.irpAnalysis
+        ? {
+            overallSummary: exercise.irpAnalysis.overallSummary,
+            strengths: exercise.irpAnalysis.strengths,
+            findings: exercise.irpAnalysis.findings,
+          }
+        : null,
       currentStep: {
         title: activeStep.title,
         knownFacts,
@@ -1829,7 +1917,8 @@ const scenarioInjects: Record<GeneratedExercise["overview"]["scenario"], Partial
 
 function buildInjects(exercise: GeneratedExercise, stage: InjectStage, commonInjects: string[], count = 3) {
   const scenarioSpecific = scenarioInjects[exercise.overview.scenario][stage] ?? [];
-  const pool = [...scenarioSpecific, ...commonInjects];
+  const contextual = buildContextualInjects(exercise, stage);
+  const pool = [...contextual, ...scenarioSpecific, ...commonInjects];
   return seededShuffle(pool, `${exercise.id}:${stage}:${exercise.overview.scenario}`)
     .slice(0, count)
     .map((text, index) => ({
@@ -1838,6 +1927,139 @@ function buildInjects(exercise: GeneratedExercise, stage: InjectStage, commonInj
       fact: text,
       unknown: stageUnknowns[stage],
     }));
+}
+
+function buildContextualInjects(exercise: GeneratedExercise, stage: InjectStage) {
+  return [
+    ...buildIndustryInjects(exercise, stage),
+    ...buildSizeInjects(exercise, stage),
+    ...buildMaturityInjects(exercise, stage),
+    ...buildIrpGapInjects(exercise, stage),
+  ];
+}
+
+function buildIndustryInjects(exercise: GeneratedExercise, stage: InjectStage) {
+  const industry = exercise.overview.industry;
+  const industryInjects: Partial<Record<GeneratedExercise["overview"]["industry"], Partial<Record<InjectStage, string[]>>>> = {
+    Healthcare: {
+      containment: ["Clinical operations says the proposed containment step may delay patient care unless a downtime workflow starts first."],
+      communications: ["The privacy officer asks whether the facts support a patient privacy review or only an operational status update."],
+    },
+    Education: {
+      communications: ["A campus leader asks what staff can tell families if classroom systems or student services are affected."],
+      recovery: ["The team realizes the recovery plan does not say how teachers or staff will be updated before the next school day."],
+    },
+    "Financial Services": {
+      initial: ["Fraud operations asks whether transaction monitoring or customer verification should be tightened immediately."],
+      communications: ["A customer operations lead wants guidance before frontline staff answer account holder questions."],
+    },
+    Manufacturing: {
+      containment: ["Operations warns that isolating the affected system could stop a production line or delay shipping commitments."],
+      recovery: ["The plant manager asks which system must recover first to avoid safety, production, or shipping impact."],
+    },
+    "Local Government": {
+      communications: ["An elected official asks for a resident-facing update before the team has confirmed the full scope."],
+      recovery: ["A public service owner asks whether continuity procedures need to stay active into the next business day."],
+    },
+    Nonprofit: {
+      communications: ["A board member asks whether donors, volunteers, or grant contacts need to hear anything today."],
+      recovery: ["Program staff say the incident may affect a grant deadline or community service event this week."],
+    },
+    "Small Business": {
+      initial: ["The owner is unavailable, and the team has to decide who can call the outside IT provider first."],
+      containment: ["Outside IT asks for approval before making a change that may interrupt customer-facing work."],
+    },
+    "MSP / IT Provider": {
+      initial: ["The service desk receives client tickets that may or may not be related to the same incident."],
+      containment: ["Restricting a shared management tool could protect clients but slow urgent support work."],
+    },
+    Other: {
+      initial: ["A business process owner asks whether their team should continue normal work while scope is unclear."],
+    },
+  };
+
+  return industryInjects[industry]?.[stage] ?? [];
+}
+
+function buildSizeInjects(exercise: GeneratedExercise, stage: InjectStage) {
+  const size = exercise.overview.organizationSize;
+  const sizeInjects: Partial<Record<GeneratedExercise["overview"]["organizationSize"], Partial<Record<InjectStage, string[]>>>> = {
+    "1-25": {
+      initial: ["The person who usually handles IT issues is unavailable for the next hour."],
+      containment: ["The team has to choose between waiting for outside support or taking a simple containment step now."],
+    },
+    "26-100": {
+      initial: ["Two managers assume the other one owns the next update, creating a handoff gap."],
+      communications: ["Staff in another department hear about the incident informally and ask who is coordinating updates."],
+    },
+    "101-500": {
+      containment: ["Two departments disagree about whether the affected service can be paused."],
+      communications: ["Separate teams are preparing separate updates, and the group needs one approved message."],
+    },
+    "501-1000": {
+      initial: ["Leadership asks whether a formal incident coordination group should activate."],
+      communications: ["Legal, communications, and operations each need different facts before approving an update."],
+    },
+    "1000+": {
+      containment: ["A regional team asks whether they have authority to act before enterprise incident command is fully assembled."],
+      communications: ["A business unit outside the initial scope reports possible impact and asks for regional guidance."],
+    },
+  };
+
+  return sizeInjects[size]?.[stage] ?? [];
+}
+
+function buildMaturityInjects(exercise: GeneratedExercise, stage: InjectStage) {
+  if (exercise.overview.maturityLevel === "Basic") {
+    const basicInjects: Partial<Record<InjectStage, string[]>> = {
+      initial: ["A non-technical employee asks for a simple explanation of what they should report and who they should tell."],
+      containment: ["Someone asks what action is safe to take now without understanding the technical details."],
+      communications: ["A leader asks for a plain-language update with no acronyms."],
+    };
+    return basicInjects[stage] ?? [];
+  }
+
+  if (exercise.overview.maturityLevel === "Advanced") {
+    const advancedInjects: Partial<Record<InjectStage, string[]>> = {
+      initial: ["A new fact challenges the initial severity rating and forces the team to justify the threshold they chose."],
+      containment: ["The highest-risk containment option may destroy or overwrite evidence unless the team sequences actions carefully."],
+      communications: ["Legal asks for a fact pattern, decision rationale, and approval trail before any external message is sent."],
+      recovery: ["Leadership asks how the team will prove the IRP gap was fixed instead of only assigning an owner."],
+    };
+    return advancedInjects[stage] ?? [];
+  }
+
+  const intermediateInjects: Partial<Record<InjectStage, string[]>> = {
+    initial: ["The team gets one more signal that increases concern but still leaves scope uncertain."],
+    containment: ["A business owner asks for the risk tradeoff before approving disruption."],
+    communications: ["Leadership wants a concise update that separates confirmed facts from assumptions."],
+  };
+
+  return intermediateInjects[stage] ?? [];
+}
+
+function buildIrpGapInjects(exercise: GeneratedExercise, stage: InjectStage) {
+  const gaps = exercise.irpAnalysis?.findings.filter((finding) => finding.status !== "found") ?? [];
+  const stageGapIds: Record<InjectStage, string[]> = {
+    kickoff: ["roles", "severity"],
+    initial: ["severity", "roles", "third-party"],
+    containment: ["containment", "evidence", "recovery"],
+    communications: ["communications", "legal-compliance", "third-party"],
+    recovery: ["lessons-learned", "recovery"],
+  };
+  const stageGaps = gaps.filter((finding) => stageGapIds[stage].includes(finding.id)).slice(0, exercise.overview.maturityLevel === "Advanced" ? 3 : 1);
+
+  return stageGaps.map((finding) => {
+    if (exercise.overview.maturityLevel === "Basic") {
+      return `The team looks for a simple answer in the IRP, but the plan is unclear about ${finding.label.toLowerCase()}.`;
+    }
+
+    if (exercise.overview.maturityLevel === "Advanced") {
+      return `The situation now directly tests the IRP gap for ${finding.label.toLowerCase()}: ${finding.summary}`;
+    }
+
+    return `The IRP appears weak on ${finding.label.toLowerCase()}, so the team needs to decide how to proceed without a perfect plan.`;
+  });
 }
 
 const stageUnknowns: Record<InjectStage, string> = {
