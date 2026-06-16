@@ -384,6 +384,69 @@ app.post("/api/ai/generate-inject", async (request, response) => {
   }
 });
 
+app.post("/api/ai/assist", async (request, response) => {
+  const configError = validateAiConfig();
+  if (configError) {
+    response.status(503).json({ error: configError });
+    return;
+  }
+
+  const authContext = await authenticateAiRequest(request);
+  if (!authContext.ok) {
+    response.status(authContext.statusCode).json({ error: authContext.error });
+    return;
+  }
+
+  if (!consumeDailyRequest()) {
+    response.status(429).json({ error: "Daily AI request limit reached." });
+    return;
+  }
+
+  const validationError = validateAssistRequest(request.body);
+  if (validationError) {
+    response.status(400).json({ error: validationError });
+    return;
+  }
+
+  try {
+    const model = process.env.OPENAI_MODEL || DEFAULT_MODEL;
+    const aiResponse = await openai.responses.create({
+      model,
+      input: [
+        {
+          role: "system",
+          content:
+            "You are TabletopForge, a calm cybersecurity tabletop exercise facilitator. Answer the user's exercise question using only the provided scenario, current step, notes, and IRP findings. If the IRP does not include the needed call tree, vendor list, authority, or evidence requirement, say that clearly and recommend a practical tabletop next step. Do not ask for secrets or provide exploit, malware, evasion, credential theft, or persistence instructions.",
+        },
+        {
+          role: "user",
+          content: JSON.stringify(buildAssistPromptPayload(request.body)),
+        },
+      ],
+      text: {
+        format: {
+          type: "json_schema",
+          name: "tabletop_assistance",
+          strict: true,
+          schema: assistSchema,
+        },
+      },
+    });
+
+    response.json({
+      model,
+      ...parseAssist(aiResponse.output_text),
+      usage: {
+        inputTokens: aiResponse.usage?.input_tokens ?? null,
+        outputTokens: aiResponse.usage?.output_tokens ?? null,
+      },
+    });
+  } catch (error) {
+    console.error("AI assistance failed", error);
+    response.status(500).json({ error: "AI assistance failed." });
+  }
+});
+
 app.use((_request, response) => {
   response.status(404).json({ error: "Not found." });
 });
@@ -408,6 +471,31 @@ const injectSchema = {
     },
     followUpQuestion: { type: "string", description: "The next question the website should ask the participants." },
     expectedDecision: { type: "string", description: "The decision the group should try to make after the inject." },
+  },
+};
+
+const assistSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["answer", "irpFinding", "recommendedNextStep", "missingInfo"],
+  properties: {
+    answer: {
+      type: "string",
+      description: "A concise, actionable answer to the user's tabletop question.",
+    },
+    irpFinding: {
+      type: "string",
+      description: "What the IRP context supports or fails to support. Empty string if not relevant.",
+    },
+    recommendedNextStep: {
+      type: "string",
+      description: "The next facilitation step the group should take.",
+    },
+    missingInfo: {
+      type: "array",
+      items: { type: "string" },
+      description: "Facts, owners, contacts, or plan details that are missing.",
+    },
   },
 };
 
@@ -1230,6 +1318,30 @@ function validateInjectRequest(body) {
   return "";
 }
 
+function validateAssistRequest(body) {
+  if (!body || typeof body !== "object") {
+    return "Request body must be a JSON object.";
+  }
+
+  if (typeof body.question !== "string" || body.question.trim().length === 0) {
+    return "question is required.";
+  }
+
+  if (!body.exercise || typeof body.exercise !== "object") {
+    return "Request body must include exercise context.";
+  }
+
+  if (!body.currentStep || typeof body.currentStep !== "object") {
+    return "Request body must include currentStep context.";
+  }
+
+  if (typeof body.currentStep.title !== "string" || body.currentStep.title.trim().length === 0) {
+    return "currentStep.title is required.";
+  }
+
+  return "";
+}
+
 function buildPromptPayload(body) {
   return {
     task: "Generate one new scenario inject for the current tabletop step.",
@@ -1262,6 +1374,64 @@ function buildPromptPayload(body) {
   };
 }
 
+function buildAssistPromptPayload(body) {
+  return {
+    task: "Answer one in-session facilitator assistance question.",
+    question: asLimitedString(body.question, 800),
+    constraints: [
+      "Give one clear recommendation first.",
+      "If the IRP has a relevant call tree, vendor list, authority path, or evidence rule, cite that in plain language.",
+      "If the IRP is missing or weak, state the gap and suggest what to do during the exercise.",
+      "Keep the answer concise and non-alarming.",
+      "Do not ask for passwords, secrets, API keys, private keys, tokens, or live credentials.",
+      "Do not provide malware, exploit, credential theft, evasion, or persistence instructions.",
+      "Return only the required JSON object.",
+    ],
+    exercise: {
+      organization: asShortString(body.exercise.organization),
+      industry: asShortString(body.exercise.industry),
+      organizationSize: asShortString(body.exercise.organizationSize),
+      scenario: asShortString(body.exercise.scenario),
+      maturityLevel: asShortString(body.exercise.maturityLevel),
+      duration: asShortString(body.exercise.duration),
+      summary: asLimitedString(body.exercise.summary, 2000),
+      objectives: asStringArray(body.exercise.objectives, 12),
+    },
+    currentStep: {
+      title: asShortString(body.currentStep.title),
+      knownFacts: asStringArray(body.currentStep.knownFacts, 12),
+      unknowns: asStringArray(body.currentStep.unknowns, 12),
+      decisions: asStringArray(body.currentStep.decisions, 12),
+      activeDecision: asLimitedString(body.currentStep.activeDecision, 600),
+      activePrompt: asLimitedString(body.currentStep.activePrompt, 600),
+    },
+    irpAnalysis: buildAssistIrpContext(body.irpAnalysis),
+    previousInjects: asStringArray(body.previousInjects, 12),
+    sessionNotes: asLimitedString(body.sessionNotes, 2000),
+    actionItems: asLimitedString(body.actionItems, 2000),
+  };
+}
+
+function buildAssistIrpContext(irpAnalysis) {
+  if (!irpAnalysis || typeof irpAnalysis !== "object") {
+    return null;
+  }
+
+  return {
+    overallSummary: asLimitedString(irpAnalysis.overallSummary, 1200),
+    strengths: asStringArray(irpAnalysis.strengths, 8),
+    findings: Array.isArray(irpAnalysis.findings)
+      ? irpAnalysis.findings.slice(0, 12).map((finding) => ({
+          label: asShortString(finding?.label),
+          status: asShortString(finding?.status),
+          summary: asLimitedString(finding?.summary, 800),
+          evidence: asStringArray(finding?.evidence, 4),
+          improvement: asLimitedString(finding?.improvement, 800),
+        }))
+      : [],
+  };
+}
+
 function parseInject(value) {
   const parsed = JSON.parse(value);
   const allowedPressureLevels = new Set(["low", "medium", "high", "critical"]);
@@ -1282,6 +1452,27 @@ function parseInject(value) {
     pressureLevel: parsed.pressureLevel,
     followUpQuestion: parsed.followUpQuestion,
     expectedDecision: parsed.expectedDecision,
+  };
+}
+
+function parseAssist(value) {
+  const parsed = JSON.parse(value);
+
+  if (
+    typeof parsed.answer !== "string" ||
+    typeof parsed.irpFinding !== "string" ||
+    typeof parsed.recommendedNextStep !== "string" ||
+    !Array.isArray(parsed.missingInfo) ||
+    !parsed.missingInfo.every((item) => typeof item === "string")
+  ) {
+    throw new Error("OpenAI response did not match the expected assistance schema.");
+  }
+
+  return {
+    answer: parsed.answer,
+    irpFinding: parsed.irpFinding,
+    recommendedNextStep: parsed.recommendedNextStep,
+    missingInfo: parsed.missingInfo.slice(0, 6),
   };
 }
 

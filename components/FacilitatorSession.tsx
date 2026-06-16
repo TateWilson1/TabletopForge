@@ -3,19 +3,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Award,
+  Bot,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
   Clock,
   Clipboard,
-  ClipboardList,
   Dices,
   Download,
   Lightbulb,
   ListTodo,
+  MessageSquare,
   Pause,
   Play,
   RefreshCw,
+  Send,
   ShieldCheck,
   Sparkles,
 } from "lucide-react";
@@ -72,6 +74,24 @@ interface AiInjectResponse {
   };
 }
 
+interface AiAssistResponse {
+  answer: string;
+  irpFinding?: string;
+  recommendedNextStep?: string;
+  missingInfo?: string[];
+}
+
+type FocusStageId = "brief" | "facts" | "decision" | "question" | "evolution" | "capture";
+
+const focusStages: Array<{ id: FocusStageId; label: string }> = [
+  { id: "brief", label: "Situation" },
+  { id: "facts", label: "Knowns" },
+  { id: "decision", label: "Decision" },
+  { id: "question", label: "Discuss" },
+  { id: "evolution", label: "Twist" },
+  { id: "capture", label: "Capture" },
+];
+
 const TABLETOPFORGE_API_URL = (process.env.NEXT_PUBLIC_TABLETOPFORGE_API_URL || "").replace(/\/$/, "");
 const AI_ENABLED_STORAGE_KEY = "tabletopforge.aiInjectsEnabled";
 const AI_ACCESS_CODE_STORAGE_KEY = "tabletopforge.aiAccessCode";
@@ -79,6 +99,8 @@ const AI_ACCESS_CODE_STORAGE_KEY = "tabletopforge.aiAccessCode";
 export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }) {
   const steps = useMemo(() => buildFacilitatorSteps(exercise), [exercise]);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [activeFocusIndex, setActiveFocusIndex] = useState(0);
+  const [decisionIndexes, setDecisionIndexes] = useState<Record<string, number>>({});
   const [revealedInjects, setRevealedInjects] = useState<RevealedInject[]>([]);
   const [decisionStatuses, setDecisionStatuses] = useState<Record<string, boolean>>({});
   const [sessionNotes, setSessionNotes] = useState("");
@@ -97,6 +119,10 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
   const [aiAccessCode, setAiAccessCode] = useState("");
   const [hasSessionToken, setHasSessionToken] = useState(false);
   const [aiInjectNotice, setAiInjectNotice] = useState("");
+  const [assistantQuestion, setAssistantQuestion] = useState("");
+  const [assistantAnswer, setAssistantAnswer] = useState("");
+  const [assistantNotice, setAssistantNotice] = useState("");
+  const [isAssistantThinking, setIsAssistantThinking] = useState(false);
   const diceIntervalRef = useRef<number | null>(null);
   const diceTimeoutRef = useRef<number | null>(null);
 
@@ -120,6 +146,9 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
   );
   const activePromptIndex = Math.min(promptIndexes[activeStep.title] ?? 0, Math.max(0, activeStep.prompts.length - 1));
   const activePrompt = activeStep.prompts[activePromptIndex] ?? "";
+  const activeFocus = focusStages[activeFocusIndex] ?? focusStages[0];
+  const activeDecisionIndex = Math.min(decisionIndexes[activeStep.title] ?? 0, Math.max(0, activeStep.decisions.length - 1));
+  const activeDecision = activeStep.decisions[activeDecisionIndex] ?? "Confirm the next decision the team needs to make.";
   const canUseAiInjects = aiInjectsEnabled && TABLETOPFORGE_API_URL.length > 0 && (hasSessionToken || aiAccessCode.trim().length > 0);
 
   const clearDiceTimers = useCallback(() => {
@@ -140,6 +169,8 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
     setIsRollingDice(false);
     setRollingValue(1);
     setAiInjectNotice("");
+    setActiveFocusIndex(0);
+    setFacilitatorHint("");
     clearDiceTimers();
   }, [activeStep.duration, activeStep.title, clearDiceTimers]);
 
@@ -229,15 +260,23 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
 
   function moveStep(direction: -1 | 1) {
     setActiveIndex((current) => Math.min(steps.length - 1, Math.max(0, current + direction)));
+    setActiveFocusIndex(0);
+    setFacilitatorHint("");
+  }
+
+  function moveFocus(direction: -1 | 1) {
+    setActiveFocusIndex((current) => Math.min(focusStages.length - 1, Math.max(0, current + direction)));
     setFacilitatorHint("");
   }
 
   function resetSession() {
     setActiveIndex(0);
+    setActiveFocusIndex(0);
     setRevealedInjects([]);
     setDecisionStatuses({});
     setCompletedSteps({});
     setPromptIndexes({});
+    setDecisionIndexes({});
     setFacilitatorHint("");
     setDiceRoll(null);
     setIsRollingDice(false);
@@ -264,6 +303,62 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
       ...current,
       [activeStep.title]: Math.min(activeStep.prompts.length - 1, Math.max(0, activePromptIndex + direction)),
     }));
+  }
+
+  function moveDecision(direction: -1 | 1) {
+    setDecisionIndexes((current) => ({
+      ...current,
+      [activeStep.title]: Math.min(activeStep.decisions.length - 1, Math.max(0, activeDecisionIndex + direction)),
+    }));
+    setFacilitatorHint("");
+  }
+
+  async function askAssistant(questionOverride?: string) {
+    const question = (questionOverride ?? assistantQuestion).trim();
+    if (!question || isAssistantThinking) {
+      return;
+    }
+
+    setAssistantQuestion(question);
+    setAssistantNotice("");
+    setIsAssistantThinking(true);
+
+    try {
+      const answer = await requestAiAssistance({
+        question,
+        exercise,
+        activeStep,
+        knownFacts,
+        unknowns,
+        activeDecision,
+        activePrompt,
+        revealedInjects,
+        sessionNotes,
+        actionItems,
+        aiAccessCode,
+        canUseAi: TABLETOPFORGE_API_URL.length > 0 && (hasSessionToken || aiAccessCode.trim().length > 0),
+      });
+      setAssistantAnswer(formatAssistantResponse(answer));
+      setAssistantNotice("Answered with TabletopForge AI.");
+    } catch {
+      setAssistantAnswer(
+        buildLocalAssistanceAnswer({
+          question,
+          exercise,
+          activeStep,
+          knownFacts,
+          unknowns,
+          activeDecision,
+          activePrompt,
+          revealedInjects,
+          sessionNotes,
+          actionItems,
+        }),
+      );
+      setAssistantNotice("Answered with built-in guidance. AI will take over here once enabled.");
+    } finally {
+      setIsAssistantThinking(false);
+    }
   }
 
   function updateAiInjectsEnabled(checked: boolean) {
@@ -401,114 +496,211 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
               </section>
             ) : null}
 
-            <section className="rounded-md border border-primary/30 bg-primary/10 p-4">
-              <div className="mb-2 flex items-center gap-2 text-sm font-medium text-primary">
-                <Sparkles className="size-4" suppressHydrationWarning />
-                TabletopForge Facilitator
-              </div>
-              <ReadingText text={activeStep.facilitatorScript} className="leading-7 text-muted-foreground" speed={32} />
-            </section>
+            <FocusStepper activeIndex={activeFocusIndex} onSelect={setActiveFocusIndex} />
 
-            <section className="rounded-md border border-border bg-background/55 p-4">
-              <div>
-                <div className="text-sm font-medium text-foreground">Suggested Time And Facilitation Cue</div>
-                <ReadingText text={activeStep.pressureNote} className="mt-1 text-sm leading-6 text-muted-foreground" speed={30} />
-              </div>
-            </section>
+            <AssistantPanel
+              question={assistantQuestion}
+              answer={assistantAnswer}
+              notice={assistantNotice}
+              isThinking={isAssistantThinking}
+              onQuestionChange={setAssistantQuestion}
+              onAsk={() => askAssistant()}
+              onQuickAsk={askAssistant}
+            />
 
-            {activeStep.scenarioBrief ? (
-              <section className="rounded-md border border-border bg-background/55 p-4">
-                <div className="mb-2 text-sm font-medium text-foreground">Current Situation</div>
-                <ReadingText text={activeStep.scenarioBrief} className="leading-7 text-muted-foreground" speed={18} />
+            {activeFocus.id === "brief" ? (
+              <section className="space-y-4 rounded-md border border-primary/30 bg-primary/10 p-5">
+                <div>
+                  <div className="mb-2 flex items-center gap-2 text-sm font-medium text-primary">
+                    <Sparkles className="size-4" suppressHydrationWarning />
+                    TabletopForge Facilitator
+                  </div>
+                  <ReadingText text={activeStep.facilitatorScript} className="leading-7 text-muted-foreground" speed={32} />
+                </div>
+                {activeStep.scenarioBrief ? (
+                  <div className="rounded-md border border-border/70 bg-background/45 p-4">
+                    <div className="mb-2 text-sm font-medium text-foreground">Current Situation</div>
+                    <ReadingText text={activeStep.scenarioBrief} className="leading-7 text-muted-foreground" speed={18} />
+                  </div>
+                ) : (
+                  <div className="rounded-md border border-border/70 bg-background/45 p-4">
+                    <ReadingText text={knownFacts[0] ?? activeStep.pressureNote} className="leading-7 text-muted-foreground" speed={28} />
+                  </div>
+                )}
+                <div className="rounded-md border border-border/70 bg-background/45 p-4">
+                  <div className="text-sm font-medium text-foreground">Suggested Time</div>
+                  <ReadingText text={activeStep.pressureNote} className="mt-1 text-sm leading-6 text-muted-foreground" speed={30} />
+                </div>
               </section>
             ) : null}
 
-            <TriageBoard
-              knownFacts={knownFacts}
-              unknowns={unknowns}
-              decisions={activeStep.decisions}
-              stepTitle={activeStep.title}
-              decisionStatuses={decisionStatuses}
-              onToggleDecision={toggleDecision}
-            />
+            {activeFocus.id === "facts" ? <TriageFacts knownFacts={knownFacts} unknowns={unknowns} /> : null}
 
-            <PromptCard
-              prompt={activePrompt}
-              currentIndex={activePromptIndex}
-              total={activeStep.prompts.length}
-              onBack={() => movePrompt(-1)}
-              onNext={() => movePrompt(1)}
-            />
-
-            <section className="space-y-3 rounded-md border border-border bg-background/45 p-4">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                <div className="flex items-start gap-3">
-                  <Checkbox checked={completedSteps[activeStep.title] === true} onCheckedChange={(value) => toggleStepComplete(value === true)} className="mt-1" />
+            {activeFocus.id === "decision" ? (
+              <section className="rounded-md border border-border bg-background/45 p-5">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div>
-                    <p className="text-sm font-medium">Mark this section complete</p>
-                    <p className="mt-1 text-sm leading-6 text-muted-foreground">Use this after the group has discussed the prompts and key decisions.</p>
-                  </div>
-                </div>
-                <Button variant="outline" onClick={() => setFacilitatorHint(buildStuckHint(activeStep))}>
-                  <Lightbulb className="size-4" suppressHydrationWarning />
-                  The team is stuck
-                </Button>
-              </div>
-              {facilitatorHint ? (
-                <ReadingText text={facilitatorHint} className="rounded-md bg-muted p-3 text-sm leading-6 text-muted-foreground" speed={26} />
-              ) : null}
-            </section>
-
-            <section className="rounded-md border border-accent/35 bg-accent/10 p-4">
-              <div className="space-y-4">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <h3 className="font-semibold">Scenario Evolution</h3>
-                    <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                      {availableInjects.length > 0
-                        ? `The next twist drops in ${formatSeconds(injectTimerSeconds)}. Roll now if the room is ready for pressure.`
-                        : "No more twists are queued for this section."}
+                    <h3 className="font-semibold">Make One Decision</h3>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      Decision {Math.min(activeDecisionIndex + 1, activeStep.decisions.length)} of {activeStep.decisions.length}
                     </p>
                   </div>
-                  <Button onClick={triggerInjectRoll} disabled={availableInjects.length === 0 || isRollingDice || Boolean(diceRoll)}>
-                    <Dices className="size-4" suppressHydrationWarning />
-                    {isRollingDice ? "Rolling..." : "Roll Now"}
+                  <div className="flex gap-2">
+                    <Button variant="outline" size="sm" onClick={() => moveDecision(-1)} disabled={activeDecisionIndex === 0}>
+                      <ChevronLeft className="size-4" suppressHydrationWarning />
+                      Previous
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => moveDecision(1)} disabled={activeDecisionIndex >= activeStep.decisions.length - 1}>
+                      Next
+                      <ChevronRight className="size-4" suppressHydrationWarning />
+                    </Button>
+                  </div>
+                </div>
+                <div className="mt-4 flex gap-3 rounded-md border border-primary/25 bg-primary/10 p-4">
+                  <Checkbox
+                    checked={decisionStatuses[decisionKey(activeStep.title, activeDecision)] === true}
+                    onCheckedChange={(value) => toggleDecision(activeDecision, value === true)}
+                    className="mt-1"
+                  />
+                  <div className="space-y-2">
+                    <ReadingText text={activeDecision} className="text-base leading-7 text-foreground" speed={34} />
+                    <Badge variant={decisionStatuses[decisionKey(activeStep.title, activeDecision)] ? "secondary" : "outline"}>
+                      {decisionStatuses[decisionKey(activeStep.title, activeDecision)] ? "Decided" : "Unresolved"}
+                    </Badge>
+                  </div>
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <Button variant="outline" onClick={() => askAssistant(`Help us decide: ${activeDecision}`)}>
+                    <Bot className="size-4" suppressHydrationWarning />
+                    Ask For Help
+                  </Button>
+                  <Button variant="outline" onClick={() => setFacilitatorHint(buildStuckHint(activeStep))}>
+                    <Lightbulb className="size-4" suppressHydrationWarning />
+                    The team is stuck
                   </Button>
                 </div>
-
-                <div className="grid gap-3 rounded-md border border-border/70 bg-background/40 p-3 md:grid-cols-[0.85fr_1.15fr]">
-                  <label className="flex items-start gap-3 text-sm leading-6 text-muted-foreground">
-                    <Checkbox checked={aiInjectsEnabled} onCheckedChange={(value) => updateAiInjectsEnabled(value === true)} className="mt-1" />
-                    <span>
-                      <span className="block font-medium text-foreground">Use AI injects</span>
-                      <span>
-                        {TABLETOPFORGE_API_URL
-                          ? "Uses your signed-in account or access code, and falls back automatically if AI is unavailable."
-                          : "Backend URL is not configured for this build."}
-                      </span>
-                    </span>
-                  </label>
-                  <Input
-                    type="password"
-                    value={aiAccessCode}
-                    onChange={(event) => updateAiAccessCode(event.target.value)}
-                    placeholder="AI access code"
-                    disabled={!aiInjectsEnabled}
-                  />
-                </div>
-                {aiInjectNotice ? <p className="text-sm leading-6 text-muted-foreground">{aiInjectNotice}</p> : null}
-                {!aiInjectNotice && aiInjectsEnabled && !hasSessionToken && !aiAccessCode.trim() ? (
-                  <p className="text-sm leading-6 text-muted-foreground">Sign in or enter the access code to try AI-generated injects.</p>
+                {facilitatorHint ? (
+                  <ReadingText text={facilitatorHint} className="mt-4 rounded-md bg-muted p-3 text-sm leading-6 text-muted-foreground" speed={26} />
                 ) : null}
-              </div>
-            </section>
+              </section>
+            ) : null}
+
+            {activeFocus.id === "question" ? (
+              <PromptCard
+                prompt={activePrompt}
+                currentIndex={activePromptIndex}
+                total={activeStep.prompts.length}
+                onBack={() => movePrompt(-1)}
+                onNext={() => movePrompt(1)}
+              />
+            ) : null}
+
+            {activeFocus.id === "evolution" ? (
+              <section className="rounded-md border border-accent/35 bg-accent/10 p-5">
+                <div className="space-y-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <h3 className="font-semibold">Scenario Twist</h3>
+                      <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                        {availableInjects.length > 0
+                          ? `The next twist drops in ${formatSeconds(injectTimerSeconds)}. Roll now if the room is ready for pressure.`
+                          : "No more twists are queued for this section."}
+                      </p>
+                    </div>
+                    <Button onClick={triggerInjectRoll} disabled={availableInjects.length === 0 || isRollingDice || Boolean(diceRoll)}>
+                      <Dices className="size-4" suppressHydrationWarning />
+                      {isRollingDice ? "Rolling..." : "Roll Now"}
+                    </Button>
+                  </div>
+
+                  <div className="grid gap-3 rounded-md border border-border/70 bg-background/40 p-3 md:grid-cols-[0.85fr_1.15fr]">
+                    <label className="flex items-start gap-3 text-sm leading-6 text-muted-foreground">
+                      <Checkbox checked={aiInjectsEnabled} onCheckedChange={(value) => updateAiInjectsEnabled(value === true)} className="mt-1" />
+                      <span>
+                        <span className="block font-medium text-foreground">Use AI twists</span>
+                        <span>
+                          {TABLETOPFORGE_API_URL
+                            ? "Uses your signed-in account or access code, and falls back automatically if AI is unavailable."
+                            : "Backend URL is not configured for this build."}
+                        </span>
+                      </span>
+                    </label>
+                    <Input
+                      type="password"
+                      value={aiAccessCode}
+                      onChange={(event) => updateAiAccessCode(event.target.value)}
+                      placeholder="Temporary AI access code"
+                      disabled={!aiInjectsEnabled}
+                    />
+                  </div>
+                  {aiInjectNotice ? <p className="text-sm leading-6 text-muted-foreground">{aiInjectNotice}</p> : null}
+                  {!aiInjectNotice && aiInjectsEnabled && !hasSessionToken && !aiAccessCode.trim() ? (
+                    <p className="text-sm leading-6 text-muted-foreground">Sign in or enter the temporary access code to try AI-generated twists.</p>
+                  ) : null}
+                </div>
+              </section>
+            ) : null}
+
+            {activeFocus.id === "capture" ? (
+              <section className="space-y-4 rounded-md border border-border bg-background/45 p-5">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="flex items-start gap-3">
+                    <Checkbox checked={completedSteps[activeStep.title] === true} onCheckedChange={(value) => toggleStepComplete(value === true)} className="mt-1" />
+                    <div>
+                      <p className="text-sm font-medium">Mark this section complete</p>
+                      <p className="mt-1 text-sm leading-6 text-muted-foreground">Capture only what matters: decisions, unanswered questions, and follow-up work.</p>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="outline" onClick={copySessionSummary}>
+                      <Clipboard className="size-4" suppressHydrationWarning />
+                      Copy Summary
+                    </Button>
+                    <Button variant="outline" onClick={downloadReadableSummary}>
+                      <Download className="size-4" suppressHydrationWarning />
+                      Download Report
+                    </Button>
+                  </div>
+                </div>
+                {exportNotice ? <p className="text-sm text-primary">{exportNotice}</p> : null}
+                <div className="grid gap-4 lg:grid-cols-2">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Discussion notes</label>
+                    <Textarea
+                      value={sessionNotes}
+                      onChange={(event) => setSessionNotes(event.target.value)}
+                      placeholder="Important decisions, unclear answers, and communication gaps."
+                      className="min-h-[150px]"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Action items</label>
+                    <Textarea
+                      value={actionItems}
+                      onChange={(event) => setActionItems(event.target.value)}
+                      placeholder="Action item | Owner | Due date | Priority"
+                      className="min-h-[150px]"
+                    />
+                  </div>
+                </div>
+              </section>
+            ) : null}
 
             <div className="flex flex-col gap-3 sm:flex-row sm:justify-between">
-              <Button variant="outline" onClick={() => moveStep(-1)} disabled={activeIndex === 0}>
+              <Button
+                variant="outline"
+                onClick={() => (activeFocusIndex === 0 ? moveStep(-1) : moveFocus(-1))}
+                disabled={activeIndex === 0 && activeFocusIndex === 0}
+              >
                 <ChevronLeft className="size-4" suppressHydrationWarning />
                 Back
               </Button>
-              {activeIndex === steps.length - 1 ? (
+              {activeFocusIndex < focusStages.length - 1 ? (
+                <Button onClick={() => moveFocus(1)}>
+                  Continue
+                  <ChevronRight className="size-4" suppressHydrationWarning />
+                </Button>
+              ) : activeIndex === steps.length - 1 ? (
                 <Button onClick={endExercise}>
                   <Award className="size-4" suppressHydrationWarning />
                   End Exercise
@@ -525,53 +717,112 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
       </div>
 
       {completedSession ? <Scorecard session={completedSession} /> : null}
-
-      <Card className="bg-background/45">
-        <CardHeader>
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <CardTitle className="flex items-center gap-2 text-lg">
-                <ClipboardList className="size-5 text-primary" suppressHydrationWarning />
-                Session Notes
-              </CardTitle>
-              {exportNotice ? <p className="mt-2 text-sm text-primary">{exportNotice}</p> : null}
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Button variant="outline" onClick={copySessionSummary}>
-                <Clipboard className="size-4" suppressHydrationWarning />
-                Copy Summary
-              </Button>
-              <Button variant="outline" onClick={downloadReadableSummary}>
-                <Download className="size-4" suppressHydrationWarning />
-                Download Report
-              </Button>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent className="grid gap-4 lg:grid-cols-2">
-          <div className="space-y-2">
-            <label className="text-sm font-medium">Discussion notes</label>
-            <Textarea
-              value={sessionNotes}
-              onChange={(event) => setSessionNotes(event.target.value)}
-              placeholder={
-                "Capture what the group says, unclear answers, ownership questions, and communication gaps."
-              }
-              className="min-h-[180px]"
-            />
-          </div>
-          <div className="space-y-2">
-            <label className="text-sm font-medium">Action items</label>
-            <Textarea
-              value={actionItems}
-              onChange={(event) => setActionItems(event.target.value)}
-              placeholder="Action item | Owner | Due date | Priority"
-              className="min-h-[180px]"
-            />
-          </div>
-        </CardContent>
-      </Card>
     </div>
+  );
+}
+
+function FocusStepper({
+  activeIndex,
+  onSelect,
+}: {
+  activeIndex: number;
+  onSelect: (index: number) => void;
+}) {
+  return (
+    <section className="rounded-md border border-border bg-background/35 p-3">
+      <div className="flex flex-wrap gap-2">
+        {focusStages.map((stage, index) => (
+          <button
+            key={stage.id}
+            className={`rounded-md border px-3 py-2 text-sm transition ${
+              index === activeIndex
+                ? "border-primary bg-primary/15 text-foreground"
+                : "border-border bg-background/40 text-muted-foreground hover:bg-muted"
+            }`}
+            onClick={() => onSelect(index)}
+          >
+            <span className="mr-2 text-xs">{index + 1}</span>
+            {stage.label}
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function AssistantPanel({
+  question,
+  answer,
+  notice,
+  isThinking,
+  onQuestionChange,
+  onAsk,
+  onQuickAsk,
+}: {
+  question: string;
+  answer: string;
+  notice: string;
+  isThinking: boolean;
+  onQuestionChange: (value: string) => void;
+  onAsk: () => void;
+  onQuickAsk: (question: string) => void;
+}) {
+  const quickQuestions = [
+    "Who should we contact first?",
+    "What does the IRP support?",
+    "What should we decide now?",
+    "Explain this for non-technical leaders.",
+  ];
+
+  return (
+    <section className="rounded-md border border-primary/25 bg-background/55 p-4">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <h3 className="flex items-center gap-2 font-semibold">
+            <Bot className="size-4 text-primary" suppressHydrationWarning />
+            Ask TabletopForge
+          </h3>
+          <p className="mt-1 text-sm leading-6 text-muted-foreground">
+            Ask for help at any point. It will use the scenario and uploaded IRP findings when available.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {quickQuestions.map((item) => (
+            <Button key={item} type="button" variant="outline" size="sm" onClick={() => onQuickAsk(item)} disabled={isThinking}>
+              <MessageSquare className="size-3.5" suppressHydrationWarning />
+              {item}
+            </Button>
+          ))}
+        </div>
+      </div>
+      <div className="mt-4 grid gap-3 md:grid-cols-[1fr_auto]">
+        <Textarea
+          value={question}
+          onChange={(event) => onQuestionChange(event.target.value)}
+          placeholder="Ask what to do next, who owns a decision, or where the IRP supports the answer."
+          className="min-h-[84px]"
+        />
+        <Button className="md:self-end" onClick={onAsk} disabled={isThinking || question.trim().length === 0}>
+          <Send className="size-4" suppressHydrationWarning />
+          {isThinking ? "Thinking..." : "Ask"}
+        </Button>
+      </div>
+      {notice ? <p className="mt-3 text-xs text-muted-foreground">{notice}</p> : null}
+      {answer ? (
+        <div className="mt-3 rounded-md border border-primary/20 bg-primary/10 p-4">
+          <ReadingText text={answer} className="text-sm leading-6 text-foreground" speed={18} />
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function TriageFacts({ knownFacts, unknowns }: { knownFacts: string[]; unknowns: string[] }) {
+  return (
+    <section className="grid gap-4 lg:grid-cols-2">
+      <BoardList title="Facts Known" items={knownFacts} />
+      <BoardList title="Unknowns To Resolve" items={unknowns} />
+    </section>
   );
 }
 
@@ -854,34 +1105,194 @@ async function requestAiInject({
   return data.inject;
 }
 
-function TriageBoard({
+async function requestAiAssistance({
+  question,
+  exercise,
+  activeStep,
   knownFacts,
   unknowns,
-  decisions,
-  stepTitle,
-  decisionStatuses,
-  onToggleDecision,
+  activeDecision,
+  activePrompt,
+  revealedInjects,
+  sessionNotes,
+  actionItems,
+  aiAccessCode,
+  canUseAi,
 }: {
+  question: string;
+  exercise: GeneratedExercise;
+  activeStep: FacilitatorStep;
   knownFacts: string[];
   unknowns: string[];
-  decisions: string[];
-  stepTitle: string;
-  decisionStatuses: Record<string, boolean>;
-  onToggleDecision: (decision: string, checked: boolean) => void;
+  activeDecision: string;
+  activePrompt: string;
+  revealedInjects: RevealedInject[];
+  sessionNotes: string;
+  actionItems: string;
+  aiAccessCode: string;
+  canUseAi: boolean;
+}): Promise<AiAssistResponse> {
+  if (!canUseAi) {
+    throw new Error("AI assistance is not configured.");
+  }
+
+  const sessionToken = getStoredSessionToken();
+  const headers = new Headers();
+  headers.set("Content-Type", "application/json");
+
+  if (sessionToken) {
+    headers.set("Authorization", `Bearer ${sessionToken}`);
+  }
+
+  if (aiAccessCode.trim()) {
+    headers.set("x-tabletopforge-ai-access-code", aiAccessCode.trim());
+  }
+
+  const response = await fetch(`${TABLETOPFORGE_API_URL}/api/ai/assist`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      question,
+      exercise: buildAiExerciseContext(exercise),
+      currentStep: {
+        title: activeStep.title,
+        knownFacts,
+        unknowns,
+        decisions: activeStep.decisions,
+        activeDecision,
+        activePrompt,
+      },
+      previousInjects: revealedInjects.map((inject) => inject.text),
+      sessionNotes,
+      actionItems,
+      irpAnalysis: exercise.irpAnalysis
+        ? {
+            overallSummary: exercise.irpAnalysis.overallSummary,
+            strengths: exercise.irpAnalysis.strengths,
+            findings: exercise.irpAnalysis.findings,
+          }
+        : null,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error("AI assistance request failed.");
+  }
+
+  const data = (await response.json()) as AiAssistResponse;
+  if (!data || typeof data.answer !== "string") {
+    throw new Error("AI assistance returned an invalid response.");
+  }
+
+  return data;
+}
+
+function buildAiExerciseContext(exercise: GeneratedExercise) {
+  return {
+    organization: exercise.overview.organization,
+    industry: exercise.overview.industry,
+    organizationSize: exercise.overview.organizationSize,
+    scenario: exercise.overview.scenario,
+    maturityLevel: exercise.overview.maturityLevel,
+    duration: exercise.overview.duration,
+    summary: exercise.scenarioSummary,
+    objectives: exercise.objectives,
+  };
+}
+
+function formatAssistantResponse(response: AiAssistResponse) {
+  return [
+    response.answer,
+    response.irpFinding ? `IRP check: ${response.irpFinding}` : "",
+    response.recommendedNextStep ? `Next step: ${response.recommendedNextStep}` : "",
+    response.missingInfo?.length ? `Missing info: ${response.missingInfo.join(", ")}` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function buildLocalAssistanceAnswer({
+  question,
+  exercise,
+  activeStep,
+  knownFacts,
+  unknowns,
+  activeDecision,
+  activePrompt,
+  revealedInjects,
+  sessionNotes,
+  actionItems,
+}: {
+  question: string;
+  exercise: GeneratedExercise;
+  activeStep: FacilitatorStep;
+  knownFacts: string[];
+  unknowns: string[];
+  activeDecision: string;
+  activePrompt: string;
+  revealedInjects: RevealedInject[];
+  sessionNotes: string;
+  actionItems: string;
 }) {
-  return (
-    <section className="grid gap-4 xl:grid-cols-3">
-      <BoardList title="Facts Known" items={knownFacts} />
-      <BoardList title="Unknowns" items={unknowns} />
-      <DecisionList
-        title="Decisions Needed"
-        items={decisions}
-        stepTitle={stepTitle}
-        decisionStatuses={decisionStatuses}
-        onToggleDecision={onToggleDecision}
-      />
-    </section>
+  const lowerQuestion = question.toLowerCase();
+  const contextText = [
+    question,
+    activeStep.title,
+    activeDecision,
+    activePrompt,
+    ...knownFacts,
+    ...unknowns,
+    ...revealedInjects.map((inject) => inject.text),
+    sessionNotes,
+    actionItems,
+  ]
+    .join(" ")
+    .toLowerCase();
+  const irpFindings = exercise.irpAnalysis?.findings ?? [];
+  const irpStrengths = exercise.irpAnalysis?.strengths ?? [];
+  const vendorTerms = /vendor|outside|third[- ]party|provider|msp|insurance|breach coach|legal|counsel|call tree|contact|escalat|support/i;
+  const relevantFindings = irpFindings.filter((finding) =>
+    vendorTerms.test(`${finding.label} ${finding.summary} ${finding.improvement} ${finding.evidence.join(" ")}`),
   );
+  const relevantStrength = irpStrengths.find((strength) => vendorTerms.test(strength));
+  const relevantGap = relevantFindings.find((finding) => finding.status !== "found");
+  const relevantFound = relevantFindings.find((finding) => finding.status === "found");
+  const asksVendorQuestion = vendorTerms.test(lowerQuestion) || vendorTerms.test(contextText);
+
+  if (asksVendorQuestion) {
+    if (relevantFound || relevantStrength) {
+      return `Start with the contact path the IRP already identifies. I found IRP support related to ${relevantFound?.label ?? "vendor or escalation contacts"}. Have the team name the system owner, the outside provider tied to that system, and the person authorized to call them. If the contact list is not in front of the group, capture that as an action item before moving on.`;
+    }
+
+    if (relevantGap) {
+      return `The IRP appears weak or incomplete for ${relevantGap.label.toLowerCase()}. For this tabletop, decide who owns the affected system first, then contact the outside provider that supports that system. If this may involve legal notification, cyber insurance, or breach response, escalate to leadership or legal before external messaging. Capture this IRP gap: ${relevantGap.improvement}`;
+    }
+
+    if (!exercise.irpAnalysis) {
+      return "No IRP was uploaded, so I cannot verify a call tree. For the exercise, start with the internal incident owner, then the outside vendor tied to the affected system, then legal or cyber insurance if severity, data exposure, or notification duties are possible. Add an action item to create a vendor call tree with owner, backup contact, phone, email, contract number, and after-hours path.";
+    }
+
+    return "I do not see a clear vendor call tree in the available IRP findings. Treat that as a gap. For now, choose the vendor based on the affected system, confirm who has authority to contact them, and document what information the team is allowed to share.";
+  }
+
+  if (lowerQuestion.includes("irp") || lowerQuestion.includes("plan")) {
+    const firstGap = irpFindings.find((finding) => finding.status !== "found");
+    if (!exercise.irpAnalysis) {
+      return "No IRP is attached to this exercise, so TabletopForge can only guide from the scenario. Ask the group where the plan should define this answer, then mark the missing IRP reference as an improvement item.";
+    }
+
+    if (firstGap) {
+      return `The IRP scan found a likely gap: ${firstGap.label}. ${firstGap.summary} Use the current discussion to decide whether that gap slows response, then capture this improvement: ${firstGap.improvement}`;
+    }
+
+    return `The IRP scan did not flag a major gap for this question. Use the plan as the source of truth, but still ask the team to name the owner, approval path, and evidence they would preserve.`;
+  }
+
+  if (lowerQuestion.includes("non-technical") || lowerQuestion.includes("plain") || exercise.overview.maturityLevel === "Basic") {
+    return `Plain-language version: ${exercise.overview.organization} is practicing who should be called, what facts matter first, and who can make decisions during a ${exercise.overview.scenario.toLowerCase()} event. For this step, ask one question: "${activeDecision}" Keep the answer focused on people, ownership, and business impact.`;
+  }
+
+  return `Focus the group on the next concrete decision: "${activeDecision}" The most important unknown is "${unknowns[0] ?? "what information is still missing"}." If nobody can answer, assign an owner to find it, write down the gap, and continue the exercise.`;
 }
 
 function BoardList({ title, items }: { title: string; items: string[] }) {
@@ -898,45 +1309,6 @@ function BoardList({ title, items }: { title: string; items: string[] }) {
             {item}
           </li>
         ))}
-      </ul>
-    </div>
-  );
-}
-
-function DecisionList({
-  title,
-  items,
-  stepTitle,
-  decisionStatuses,
-  onToggleDecision,
-}: {
-  title: string;
-  items: string[];
-  stepTitle: string;
-  decisionStatuses: Record<string, boolean>;
-  onToggleDecision: (decision: string, checked: boolean) => void;
-}) {
-  return (
-    <div className="rounded-md border border-border bg-background/45 p-4">
-      <h3 className="mb-3 text-sm font-semibold text-foreground">{title}</h3>
-      <ul className="space-y-3">
-        {items.map((item, index) => {
-          const checked = decisionStatuses[decisionKey(stepTitle, item)] === true;
-
-          return (
-            <li
-              key={`${stepTitle}-${index}-${item}`}
-              className="session-list-item flex gap-3 text-sm leading-6 text-muted-foreground"
-              style={{ animationDelay: `${Math.min(index * 70, 420)}ms` }}
-            >
-              <Checkbox checked={checked} onCheckedChange={(value) => onToggleDecision(item, value === true)} className="mt-1" />
-              <div className="space-y-1">
-                <p>{item}</p>
-                <Badge variant={checked ? "secondary" : "outline"}>{checked ? "Decided" : "Unresolved"}</Badge>
-              </div>
-            </li>
-          );
-        })}
       </ul>
     </div>
   );
