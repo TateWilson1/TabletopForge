@@ -17,6 +17,7 @@ const DEFAULT_ALLOWED_ORIGINS = [
 const ACTIVE_SUBSCRIPTION_STATUSES = new Set(["active", "trialing"]);
 const SESSION_DAYS = 30;
 const LOGIN_CODE_MINUTES = 15;
+const DEFAULT_SUBSCRIPTION_MONTHLY_LIMIT = 10;
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
@@ -80,6 +81,7 @@ app.get("/health", async (request, response) => {
     database,
     databaseBootstrap: databaseBootstrapStatus,
     stripeConfigured: Boolean(stripe),
+    aiFeatureEnabled: isAiFeatureEnabled(),
     authDeliveryMode: getAuthDeliveryMode(),
   });
 });
@@ -144,8 +146,7 @@ app.post("/api/auth/verify-code", async (request, response) => {
     response.json({
       token: session.token,
       expiresAt: session.expiresAt.toISOString(),
-      user: publicUser(signedInUser),
-      entitlements: buildEntitlements(signedInUser),
+      ...(await buildAccountPayload(signedInUser)),
     });
   } catch (error) {
     sendApiError(response, error, "Could not verify sign in.");
@@ -168,7 +169,7 @@ app.post("/api/auth/logout", async (request, response) => {
 app.get("/api/me", async (request, response) => {
   try {
     const session = await authenticateRequest(request);
-    response.json({ user: publicUser(session.user), entitlements: buildEntitlements(session.user) });
+    response.json(await buildAccountPayload(session.user));
   } catch (error) {
     sendAuthError(response, error);
   }
@@ -179,9 +180,38 @@ app.get("/api/entitlements", async (request, response) => {
     const session = await authenticateRequest(request);
     const usage = await getUserUsageSummary(session.user.id);
     response.json({
-      user: publicUser(session.user),
-      entitlements: buildEntitlements(session.user),
+      ...(await buildAccountPayload(session.user)),
       usage,
+    });
+  } catch (error) {
+    sendAuthError(response, error);
+  }
+});
+
+app.get("/api/tabletops", async (request, response) => {
+  try {
+    const session = await authenticateRequest(request);
+    const result = await dbQuery(
+      `SELECT "id", "title", "status", "generationSource", "industry", "scenarioType", "maturityLevel", "createdAt", "updatedAt"
+       FROM "tabletops"
+       WHERE "userId" = $1 AND "deletedAt" IS NULL
+       ORDER BY "createdAt" DESC
+       LIMIT 50`,
+      [session.user.id],
+    );
+
+    response.json({
+      tabletops: result.rows.map((tabletop) => ({
+        id: tabletop.id,
+        title: tabletop.title,
+        status: tabletop.status,
+        generationSource: tabletop.generationSource,
+        industry: tabletop.industry,
+        scenarioType: tabletop.scenarioType,
+        maturityLevel: tabletop.maturityLevel,
+        createdAt: tabletop.createdAt,
+        updatedAt: tabletop.updatedAt,
+      })),
     });
   } catch (error) {
     sendAuthError(response, error);
@@ -214,8 +244,7 @@ app.post("/api/tabletops/generate", async (request, response) => {
     response.json({
       tabletopId: tabletop.id,
       exercise,
-      user: publicUser(user),
-      entitlements: buildEntitlements(user),
+      ...(await buildAccountPayload(user)),
     });
   } catch (error) {
     if (error.statusCode === 402) {
@@ -245,8 +274,7 @@ app.post("/api/tabletops/consume-generation", async (request, response) => {
 
     response.json({
       tabletopId: tabletop.id,
-      user: publicUser(user),
-      entitlements: buildEntitlements(user),
+      ...(await buildAccountPayload(user)),
     });
   } catch (error) {
     if (error.statusCode === 402) {
@@ -453,6 +481,17 @@ async function consumeGenerationEntitlement(userId, { title, generationSource, e
     const hasFreeCredit = user.freeGenerationsRemaining > 0;
     let entitlementType = "subscription";
 
+    if (hasSubscription) {
+      const subscriptionLimit = getSubscriptionMonthlyLimit();
+      const subscriptionUsage = await getSubscriptionUsageThisMonth(userId, client);
+      if (subscriptionUsage >= subscriptionLimit) {
+        throw Object.assign(
+          new Error(`Your subscription has reached its monthly generation limit of ${subscriptionLimit}.`),
+          { statusCode: 402 },
+        );
+      }
+    }
+
     if (!hasSubscription && !hasPurchasedCredit && !hasFreeCredit) {
       throw Object.assign(new Error("You have used your free tabletop. Buy one tabletop or start a subscription to generate more."), {
         statusCode: 402,
@@ -571,6 +610,27 @@ async function getUserUsageSummary(userId) {
       summary[row.entitlementType] = Number(row.count);
       return summary;
     }, {}),
+  };
+}
+
+async function getSubscriptionUsageThisMonth(userId, client = pool) {
+  const result = await client.query(
+    `SELECT COUNT(*)::int AS "count"
+     FROM "generation_usages"
+     WHERE "userId" = $1
+       AND "entitlementType" = 'subscription'
+       AND "createdAt" >= date_trunc('month', NOW())`,
+    [userId],
+  );
+
+  return Number(result.rows[0]?.count ?? 0);
+}
+
+async function buildAccountPayload(user) {
+  const subscriptionGenerationsUsedThisMonth = await getSubscriptionUsageThisMonth(user.id);
+  return {
+    user: publicUser(user),
+    entitlements: buildEntitlements(user, subscriptionGenerationsUsedThisMonth),
   };
 }
 
@@ -726,16 +786,23 @@ function publicUser(user) {
   };
 }
 
-function buildEntitlements(user) {
+function buildEntitlements(user, subscriptionGenerationsUsedThisMonth = 0) {
   const freeGenerationsRemaining = Number(user.freeGenerationsRemaining ?? 0);
   const generationCredits = Number(user.generationCredits ?? 0);
   const subscriptionStatus = user.subscriptionStatus ?? "none";
   const hasActiveSubscription = ACTIVE_SUBSCRIPTION_STATUSES.has(subscriptionStatus);
+  const subscriptionMonthlyLimit = getSubscriptionMonthlyLimit();
+  const subscriptionGenerationsRemainingThisMonth = hasActiveSubscription
+    ? Math.max(0, subscriptionMonthlyLimit - subscriptionGenerationsUsedThisMonth)
+    : 0;
 
   return {
-    canGenerate: hasActiveSubscription || generationCredits > 0 || freeGenerationsRemaining > 0,
+    canGenerate: subscriptionGenerationsRemainingThisMonth > 0 || generationCredits > 0 || freeGenerationsRemaining > 0,
     freeGenerationsRemaining,
     generationCredits,
+    subscriptionMonthlyLimit,
+    subscriptionGenerationsUsedThisMonth,
+    subscriptionGenerationsRemainingThisMonth,
     subscriptionStatus,
     billingPlan: user.billingPlan ?? "free",
   };
@@ -1078,7 +1145,20 @@ function getAuthDeliveryMode() {
   return process.env.TABLETOPFORGE_AUTH_DELIVERY_MODE === "email" ? "email" : "screen";
 }
 
+function isAiFeatureEnabled() {
+  return process.env.TABLETOPFORGE_AI_FEATURE_ENABLED === "true";
+}
+
+function getSubscriptionMonthlyLimit() {
+  const configuredLimit = Number.parseInt(process.env.TABLETOPFORGE_SUBSCRIPTION_MONTHLY_LIMIT || "", 10);
+  return Number.isFinite(configuredLimit) && configuredLimit > 0 ? configuredLimit : DEFAULT_SUBSCRIPTION_MONTHLY_LIMIT;
+}
+
 function validateAiConfig() {
+  if (!isAiFeatureEnabled()) {
+    return "AI features are disabled until OpenAI billing and production controls are ready.";
+  }
+
   if (!process.env.OPENAI_API_KEY) {
     return "OPENAI_API_KEY is not configured.";
   }

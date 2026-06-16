@@ -3,18 +3,18 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 const privacySections = [
   {
-    title: "Local-Only By Default",
-    text: "Generated exercises, IRP text, notes, injects, and scorecards are stored in this browser unless you export or delete them.",
+    title: "Account Storage",
+    text: "Generated tabletop packages may be stored in PostgreSQL so they can be tied to your account, free generation, paid credits, or subscription status.",
     icon: ShieldCheck,
   },
   {
-    title: "No AI Backend Enabled",
-    text: "The current public version does not send IRPs or session notes to an AI service. AI controls are placeholders for a future opt-in mode.",
+    title: "IRP Contents",
+    text: "Uploaded or pasted IRP text is used in the browser to shape the exercise. Raw IRP contents should not be stored in PostgreSQL.",
     icon: ServerOff,
   },
   {
-    title: "Future AI Mode",
-    text: "If AI is added later, it should use a backend service, hidden API keys, access controls, rate limits, and clear user consent before sending session content.",
+    title: "AI Mode",
+    text: "AI features are controlled by the backend, use server-side API keys only, and can be disabled until billing, limits, and user consent are ready.",
     icon: Sparkles,
   },
   {
@@ -30,7 +30,7 @@ export default function PrivacyPage() {
       <div className="mb-8 max-w-3xl">
         <h1 className="text-3xl font-semibold tracking-normal text-foreground">Privacy And AI Readiness</h1>
         <p className="mt-3 text-muted-foreground">
-          TabletopForge is designed to keep sensitive tabletop material local unless a future AI mode is explicitly enabled.
+          TabletopForge is designed to avoid storing raw IRP contents while still keeping generated tabletop records tied to user accounts.
         </p>
       </div>
       <div className="grid gap-4 sm:grid-cols-2">

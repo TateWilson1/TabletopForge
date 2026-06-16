@@ -21,7 +21,7 @@ const plans = [
     name: "Subscription",
     price: "Monthly",
     description: "Best for teams that run recurring exercises.",
-    features: ["Ongoing generation access", "AI inject readiness", "Better fit for consultants and MSPs"],
+    features: ["10 tabletop generations per month", "AI inject readiness", "Better fit for consultants and MSPs"],
   },
 ];
 
@@ -31,7 +31,7 @@ export default function PricingPage() {
       <div className="mb-8 max-w-3xl">
         <h1 className="text-3xl font-semibold tracking-normal text-foreground">Pricing</h1>
         <p className="mt-3 text-muted-foreground">
-          Start with one free tabletop. After that, buy individual tabletop credits or use a subscription.
+          Start with one free tabletop. After that, buy individual tabletop credits or use a capped monthly subscription.
         </p>
       </div>
 
@@ -64,9 +64,14 @@ export default function PricingPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <Button asChild>
-              <Link href="/generate">Generate A Tabletop</Link>
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button asChild>
+                <Link href="/generate">Generate A Tabletop</Link>
+              </Button>
+              <Button asChild variant="outline">
+                <Link href="/refunds">Refund Notes</Link>
+              </Button>
+            </div>
           </CardContent>
         </Card>
         <AccountPanel />

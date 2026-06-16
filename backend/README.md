@@ -51,8 +51,10 @@ DATABASE_URL="postgresql://tabletopadmin:YOUR_PASSWORD@tabletopforgedatabase.pos
 TABLETOPFORGE_AUTH_SECRET="use-a-long-random-secret"
 TABLETOPFORGE_AUTH_DELIVERY_MODE="screen"
 TABLETOPFORGE_AUTO_MIGRATE="true"
+TABLETOPFORGE_SUBSCRIPTION_MONTHLY_LIMIT="10"
 OPENAI_API_KEY="sk-proj-YOUR_OPENAI_KEY"
 OPENAI_MODEL="gpt-5-mini"
+TABLETOPFORGE_AI_FEATURE_ENABLED="false"
 TABLETOPFORGE_AI_ACCESS_CODE="change-this-before-public-use"
 TABLETOPFORGE_AI_DAILY_LIMIT="50"
 TABLETOPFORGE_ALLOWED_ORIGINS="https://tatewilson1.github.io,http://localhost:3000,http://localhost:3001"
@@ -70,8 +72,10 @@ Notes:
 - `TABLETOPFORGE_AUTH_SECRET` should be a long random value and should stay server-only.
 - `TABLETOPFORGE_AUTH_DELIVERY_MODE="screen"` shows login codes in the browser for setup/testing. Before a public paid launch, switch this to a real email or auth provider flow.
 - `TABLETOPFORGE_AUTO_MIGRATE` lets the backend create the SaaS account/billing support tables on startup. Keep Prisma migrations as the source of truth; this is a deployment safety net.
+- `TABLETOPFORGE_SUBSCRIPTION_MONTHLY_LIMIT` caps subscription generations per calendar month.
 - `OPENAI_API_KEY` must stay server-only.
 - `OPENAI_MODEL` defaults to `gpt-5-mini` if omitted.
+- `TABLETOPFORGE_AI_FEATURE_ENABLED` should stay `false` until OpenAI billing, prompts, rate limits, and abuse controls are ready.
 - `TABLETOPFORGE_AI_DAILY_LIMIT` is enforced in memory per running server instance.
 - `TABLETOPFORGE_ALLOWED_ORIGINS` should include your GitHub Pages origin, not the full path. Use `https://tatewilson1.github.io`, not `https://tatewilson1.github.io/TabletopForge`.
 - Stripe variables are optional until you want real paid checkout. Without them, the checkout endpoint returns a clear configuration error.
@@ -172,8 +176,10 @@ DATABASE_URL
 TABLETOPFORGE_AUTH_SECRET
 TABLETOPFORGE_AUTH_DELIVERY_MODE
 TABLETOPFORGE_AUTO_MIGRATE
+TABLETOPFORGE_SUBSCRIPTION_MONTHLY_LIMIT
 OPENAI_API_KEY
 OPENAI_MODEL
+TABLETOPFORGE_AI_FEATURE_ENABLED
 TABLETOPFORGE_AI_ACCESS_CODE
 TABLETOPFORGE_AI_DAILY_LIMIT
 TABLETOPFORGE_ALLOWED_ORIGINS
@@ -235,8 +241,10 @@ DATABASE_URL
 TABLETOPFORGE_AUTH_SECRET
 TABLETOPFORGE_AUTH_DELIVERY_MODE
 TABLETOPFORGE_AUTO_MIGRATE
+TABLETOPFORGE_SUBSCRIPTION_MONTHLY_LIMIT
 OPENAI_API_KEY
 OPENAI_MODEL
+TABLETOPFORGE_AI_FEATURE_ENABLED
 TABLETOPFORGE_AI_ACCESS_CODE
 TABLETOPFORGE_AI_DAILY_LIMIT
 TABLETOPFORGE_ALLOWED_ORIGINS

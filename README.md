@@ -21,6 +21,8 @@ The product focuses on practical tabletop packages that help organizations test 
 - User account flow for free-generation and paid-credit entitlement checks
 - PostgreSQL-backed generation records tied to user accounts
 - Stripe-ready backend for pay-per-generation and subscription checkout
+- Monthly subscription generation cap before AI billing is enabled
+- Draft terms, privacy, and refund/cancellation pages
 - Responsive dark GRC dashboard interface
 
 ## Tech Stack
@@ -46,8 +48,10 @@ The long-term architecture is:
 4. Each user receives one free generation.
 5. After the free generation is used, `/api/tabletops/generate` blocks generation unless the user has purchased credits or an active subscription.
 6. Stripe Checkout grants either one paid generation credit or subscription status through webhook events.
-7. `TABLETOPFORGE_AI_ACCESS_CODE` is only a temporary development/testing guard. Production authorization should be user-session based.
-8. Uploaded IRP contents should not be stored in PostgreSQL. Store generated tabletop output and Azure Blob metadata only.
+7. Subscriptions are capped by `TABLETOPFORGE_SUBSCRIPTION_MONTHLY_LIMIT` before public AI usage is enabled.
+8. `TABLETOPFORGE_AI_ACCESS_CODE` is only a temporary development/testing guard. Production authorization should be user-session based.
+9. `TABLETOPFORGE_AI_FEATURE_ENABLED` should stay `false` until OpenAI billing, rate limits, and prompts are ready.
+10. Uploaded IRP contents should not be stored in PostgreSQL. Store generated tabletop output and Azure Blob metadata only.
 
 ## Backend API Direction
 
@@ -72,14 +76,16 @@ Completed foundation:
 - Paid-credit and subscription-ready data model.
 - Stripe checkout/webhook route skeleton.
 - PostgreSQL storage for generated tabletop records tied to users.
+- Monthly subscription generation limit.
+- Account dashboard with recent PostgreSQL-backed tabletop generations.
+- Draft privacy, terms, and refund/cancellation pages.
 
 Next setup steps:
 
-- Fix Azure PostgreSQL networking so App Service can connect to the database.
 - Add a long random `TABLETOPFORGE_AUTH_SECRET` in Azure App Service settings.
 - Keep `TABLETOPFORGE_AUTH_DELIVERY_MODE="screen"` only for testing; replace it with real email/OAuth before public paid launch.
-- Add Stripe products/prices and set `STRIPE_SECRET_KEY`, `STRIPE_PRICE_TABLETOP`, `STRIPE_PRICE_SUBSCRIPTION`, and `STRIPE_WEBHOOK_SECRET`.
 - Add OpenAI credits before enabling real AI generation paths.
+- Keep `TABLETOPFORGE_AI_FEATURE_ENABLED="false"` until you are ready for OpenAI spend.
 - Replace the temporary access-code testing path with user-session-only authorization for production.
 
 ## Run Locally

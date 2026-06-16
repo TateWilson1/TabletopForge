@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CreditCard, LogOut, Mail, RefreshCw, ShieldCheck, UserCheck } from "lucide-react";
+import { CreditCard, FileText, LogOut, Mail, RefreshCw, ShieldCheck, UserCheck } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,11 +11,13 @@ import {
   clearSessionToken,
   createCheckoutSession,
   fetchAccount,
+  fetchAccountTabletops,
   getStoredSessionToken,
   isAccountApiConfigured,
   requestLoginCode,
   signOut,
   verifyLoginCode,
+  type AccountTabletop,
   type AccountState,
 } from "@/lib/account";
 
@@ -33,6 +35,7 @@ export function AccountPanel({
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [isBusy, setIsBusy] = useState(false);
+  const [tabletops, setTabletops] = useState<AccountTabletop[]>([]);
 
   useEffect(() => {
     if (!isAccountApiConfigured() || !getStoredSessionToken()) {
@@ -51,6 +54,9 @@ export function AccountPanel({
       const nextAccount = await fetchAccount();
       setAccount(nextAccount);
       onAccountChange?.(nextAccount);
+      if (!compact) {
+        setTabletops(await fetchAccountTabletops());
+      }
     } catch (requestError) {
       clearSessionToken();
       setAccount(null);
@@ -87,6 +93,9 @@ export function AccountPanel({
       const nextAccount = await verifyLoginCode(email, code);
       setAccount(nextAccount);
       onAccountChange?.(nextAccount);
+      if (!compact) {
+        setTabletops(await fetchAccountTabletops());
+      }
       setNotice("Signed in. Your account is ready.");
       setScreenCode("");
     } catch (requestError) {
@@ -102,6 +111,7 @@ export function AccountPanel({
     try {
       await signOut();
       setAccount(null);
+      setTabletops([]);
       onAccountChange?.(null);
       setNotice("Signed out.");
     } catch (requestError) {
@@ -166,17 +176,31 @@ export function AccountPanel({
             <AccountMetric label="Plan" value={formatPlan(account.entitlements.billingPlan, account.entitlements.subscriptionStatus)} />
           </div>
 
-          {!compact ? (
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Button variant="outline" onClick={() => handleCheckout("tabletop")} disabled={isBusy}>
-                <CreditCard className="size-4" suppressHydrationWarning />
-                Buy One Tabletop
-              </Button>
-              <Button onClick={() => handleCheckout("subscription")} disabled={isBusy}>
-                <ShieldCheck className="size-4" suppressHydrationWarning />
-                Start Subscription
-              </Button>
+          {account.entitlements.billingPlan === "subscription" ? (
+            <div className="rounded-md border border-border bg-background/50 p-3">
+              <p className="text-sm font-medium text-foreground">Subscription usage this month</p>
+              <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                {account.entitlements.subscriptionGenerationsUsedThisMonth} of{" "}
+                {account.entitlements.subscriptionMonthlyLimit} generations used.{" "}
+                {account.entitlements.subscriptionGenerationsRemainingThisMonth} remaining.
+              </p>
             </div>
+          ) : null}
+
+          {!compact ? (
+            <>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Button variant="outline" onClick={() => handleCheckout("tabletop")} disabled={isBusy}>
+                  <CreditCard className="size-4" suppressHydrationWarning />
+                  Buy One Tabletop
+                </Button>
+                <Button onClick={() => handleCheckout("subscription")} disabled={isBusy}>
+                  <ShieldCheck className="size-4" suppressHydrationWarning />
+                  Start Subscription
+                </Button>
+              </div>
+              <TabletopHistory tabletops={tabletops} />
+            </>
           ) : null}
 
           {notice ? <p className="text-sm text-primary">{notice}</p> : null}
@@ -246,6 +270,32 @@ export function AccountPanel({
         {error ? <p className="text-sm text-destructive">{error}</p> : null}
       </CardContent>
     </Card>
+  );
+}
+
+function TabletopHistory({ tabletops }: { tabletops: AccountTabletop[] }) {
+  return (
+    <section className="rounded-md border border-border bg-background/45 p-4">
+      <div className="mb-3 flex items-center gap-2">
+        <FileText className="size-4 text-primary" suppressHydrationWarning />
+        <h3 className="text-sm font-semibold text-foreground">Recent Tabletop Generations</h3>
+      </div>
+      {tabletops.length === 0 ? (
+        <p className="text-sm leading-6 text-muted-foreground">Generated tabletops will appear here after you create them.</p>
+      ) : (
+        <div className="space-y-2">
+          {tabletops.slice(0, 8).map((tabletop) => (
+            <div key={tabletop.id} className="rounded-md border border-border bg-background/55 p-3">
+              <p className="text-sm font-medium text-foreground">{tabletop.title}</p>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                {[tabletop.scenarioType, tabletop.industry, tabletop.maturityLevel].filter(Boolean).join(" | ") || "Tabletop generation"}{" "}
+                - {new Date(tabletop.createdAt).toLocaleDateString()}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 

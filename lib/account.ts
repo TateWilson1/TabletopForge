@@ -19,6 +19,9 @@ export interface AccountEntitlements {
   canGenerate: boolean;
   freeGenerationsRemaining: number;
   generationCredits: number;
+  subscriptionMonthlyLimit: number;
+  subscriptionGenerationsUsedThisMonth: number;
+  subscriptionGenerationsRemainingThisMonth: number;
   subscriptionStatus: string;
   billingPlan: string;
 }
@@ -36,6 +39,18 @@ export interface LoginCodeResponse {
   message: string;
 }
 
+export interface AccountTabletop {
+  id: string;
+  title: string;
+  status: string;
+  generationSource: string;
+  industry: string | null;
+  scenarioType: string | null;
+  maturityLevel: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export function normalizeAccountState(account: Partial<AccountState> | null | undefined): AccountState | null {
   if (!account?.user) {
     return null;
@@ -51,6 +66,10 @@ export function normalizeAccountState(account: Partial<AccountState> | null | un
         account.user.freeGenerationsRemaining > 0,
       freeGenerationsRemaining: account.user.freeGenerationsRemaining ?? 0,
       generationCredits: account.user.generationCredits ?? 0,
+      subscriptionMonthlyLimit: 10,
+      subscriptionGenerationsUsedThisMonth: 0,
+      subscriptionGenerationsRemainingThisMonth:
+        account.user.subscriptionStatus === "active" || account.user.subscriptionStatus === "trialing" ? 10 : 0,
       subscriptionStatus: account.user.subscriptionStatus ?? "none",
       billingPlan: account.user.billingPlan ?? "free",
     },
@@ -106,6 +125,11 @@ export async function fetchAccount(): Promise<AccountState> {
   }
 
   return normalized;
+}
+
+export async function fetchAccountTabletops(): Promise<AccountTabletop[]> {
+  const result = await apiFetch<{ tabletops: AccountTabletop[] }>("/api/tabletops", { method: "GET", auth: true });
+  return result.tabletops ?? [];
 }
 
 export async function signOut() {
