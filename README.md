@@ -6,7 +6,9 @@ Tagline: Simple incident response tabletop exercises for real-world readiness.
 
 ## Overview
 
-The app creates practical tabletop packages that help organizations test incident response planning without paid APIs or complex inject design. It focuses on discussion quality, IRP gap discovery, and executive-ready documentation.
+TabletopForge is being built as a public SaaS website, not a private access-code tool. Users should be able to create an account, log in, receive one free tabletop generation, and then continue by buying individual tabletop generation credits or subscribing for more generation access.
+
+The product focuses on practical tabletop packages that help organizations test incident response planning, discover IRP gaps, and produce executive-ready documentation. OpenAI usage belongs behind the backend only; browser code should never receive or expose the OpenAI API key.
 
 ## Features
 
@@ -16,6 +18,9 @@ The app creates practical tabletop packages that help organizations test inciden
 - Lessons-learned template with action item, owner, due date, and priority prompts
 - Copyable and downloadable Markdown reports
 - Browser-based saved exercises with LocalStorage
+- User account flow for free-generation and paid-credit entitlement checks
+- PostgreSQL-backed generation records tied to user accounts
+- Stripe-ready backend for pay-per-generation and subscription checkout
 - Responsive dark GRC dashboard interface
 
 ## Tech Stack
@@ -25,7 +30,57 @@ The app creates practical tabletop packages that help organizations test inciden
 - Tailwind CSS
 - shadcn/ui-style components
 - App Router
-- LocalStorage
+- Azure App Service backend
+- Azure PostgreSQL
+- Prisma migrations
+- Stripe-ready billing endpoints
+- OpenAI API server-side only
+
+## SaaS Architecture Direction
+
+The long-term architecture is:
+
+1. Static/public frontend hosts the user experience.
+2. Backend owns authentication, authorization, generation entitlement, billing, and all OpenAI calls.
+3. PostgreSQL stores users, sessions, generated tabletops, usage ledgers, paid-credit ledgers, subscription records, AI runs, uploaded file metadata, and deletion logs.
+4. Each user receives one free generation.
+5. After the free generation is used, `/api/tabletops/generate` blocks generation unless the user has purchased credits or an active subscription.
+6. Stripe Checkout grants either one paid generation credit or subscription status through webhook events.
+7. `TABLETOPFORGE_AI_ACCESS_CODE` is only a temporary development/testing guard. Production authorization should be user-session based.
+8. Uploaded IRP contents should not be stored in PostgreSQL. Store generated tabletop output and Azure Blob metadata only.
+
+## Backend API Direction
+
+The backend is responsible for:
+
+- `GET /api/entitlements`: return user usage and generation eligibility.
+- `POST /api/tabletops/generate`: create/store a user-owned tabletop generation after entitlement checks.
+- `POST /api/billing/create-checkout-session`: start Stripe Checkout for pay-per-generation or subscription.
+- `POST /api/billing/stripe-webhook`: receive Stripe events and update credits/subscriptions.
+- `POST /api/ai/generate-inject`: generate live injects with server-side OpenAI access and user-based authorization.
+
+The current frontend still uses the deterministic local generator for the tabletop package, then sends the generated package to the backend for entitlement enforcement and PostgreSQL storage. The backend route is the place to move full AI tabletop generation when OpenAI credits and final prompts are ready.
+
+## Implementation Roadmap
+
+Completed foundation:
+
+- Azure backend separated from GitHub Pages static hosting.
+- Server-side OpenAI key usage for AI injects.
+- Account/session endpoints.
+- One-free-generation entitlement model.
+- Paid-credit and subscription-ready data model.
+- Stripe checkout/webhook route skeleton.
+- PostgreSQL storage for generated tabletop records tied to users.
+
+Next setup steps:
+
+- Fix Azure PostgreSQL networking so App Service can connect to the database.
+- Add a long random `TABLETOPFORGE_AUTH_SECRET` in Azure App Service settings.
+- Keep `TABLETOPFORGE_AUTH_DELIVERY_MODE="screen"` only for testing; replace it with real email/OAuth before public paid launch.
+- Add Stripe products/prices and set `STRIPE_SECRET_KEY`, `STRIPE_PRICE_TABLETOP`, `STRIPE_PRICE_SUBSCRIPTION`, and `STRIPE_WEBHOOK_SECRET`.
+- Add OpenAI credits before enabling real AI generation paths.
+- Replace the temporary access-code testing path with user-session-only authorization for production.
 
 ## Run Locally
 
@@ -38,12 +93,13 @@ Open `http://localhost:3000`.
 
 ## Use Without Installing Developer Tools
 
-Most users should not run the project with `npm`. Publish the app as a hosted website or package the static build into a desktop release.
+Most users should not run the project with `npm`. Publish the app as a hosted SaaS website where the frontend calls the Azure App Service backend.
 
-- Hosted website: run `npm run build:static` during deployment and publish the generated `out/` folder.
-- Windows app: package the generated `out/` folder with a desktop wrapper such as Tauri or Electron and attach the installer to a GitHub Release.
+- Hosted website: run `npm run build:static` during deployment and publish the generated `out/` folder through GitHub Pages or another static host.
+- Backend: deploy the `backend` folder to Azure App Service.
+- Database: use Azure PostgreSQL with Prisma migrations and/or the backend bootstrap safety net.
 
-The app currently stores exercises and scorecards in the user's browser storage, so a hosted static website works without a database or backend.
+The browser can still keep local saved sessions for convenience, but the SaaS product direction is PostgreSQL-backed user ownership and billing-aware generation limits.
 
 See `docs/DISTRIBUTION.md` for the GitHub Pages and desktop release path, including an example GitHub Actions workflow.
 

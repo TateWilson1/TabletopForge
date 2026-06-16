@@ -8,42 +8,96 @@ datasource db {
 }
 
 model User {
-  id                       String         @id @default(uuid()) @db.Uuid
-  email                    String         @unique
-  createdAt                DateTime       @default(now())
-  updatedAt                DateTime       @updatedAt
-  freeGenerationsRemaining Int            @default(1)
-  generationCredits        Int            @default(0)
-  billingPlan              String         @default("free")
-  subscriptionStatus       String         @default("none")
-  stripeCustomerId         String?        @unique
+  id                       String             @id @default(uuid()) @db.Uuid
+  email                    String             @unique
+  createdAt                DateTime           @default(now())
+  updatedAt                DateTime           @updatedAt
+  freeGenerationsRemaining Int                @default(1)
+  generationCredits        Int                @default(0)
+  billingPlan              String             @default("free")
+  subscriptionStatus       String             @default("none")
+  stripeCustomerId         String?            @unique
   tabletops                Tabletop[]
   authSessions             AuthSession[]
   loginCodes               LoginCode[]
   aiRuns                   AiRun[]
   billingEvents            BillingEvent[]
+  generationUsages         GenerationUsage[]
+  paidCreditLedger         PaidCreditLedger[]
+  subscriptions            Subscription[]
 
   @@map("users")
 }
 
 model Tabletop {
-  id               String         @id @default(uuid()) @db.Uuid
-  userId           String?        @db.Uuid
-  user             User?          @relation(fields: [userId], references: [id], onDelete: SetNull)
+  id               String            @id @default(uuid()) @db.Uuid
+  userId           String?           @db.Uuid
+  user             User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
   title            String
-  status           String         @default("draft")
-  generationSource String         @default("local")
-  createdAt        DateTime       @default(now())
-  updatedAt        DateTime       @updatedAt
+  status           String            @default("draft")
+  generationSource String            @default("local")
+  exerciseJson     Json?
+  scenarioType     String?
+  industry         String?
+  maturityLevel    String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
   deletedAt        DateTime?
   uploadedFiles    UploadedFile[]
   aiRuns           AiRun[]
   deletionLogs     DeletionLog[]
+  generationUsages GenerationUsage[]
 
   @@index([userId])
   @@index([status])
   @@index([deletedAt])
   @@map("tabletops")
+}
+
+model GenerationUsage {
+  id              String    @id @default(uuid()) @db.Uuid
+  userId          String    @db.Uuid
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tabletopId      String?   @db.Uuid
+  tabletop        Tabletop? @relation(fields: [tabletopId], references: [id], onDelete: SetNull)
+  entitlementType String
+  createdAt       DateTime  @default(now())
+
+  @@index([userId])
+  @@index([tabletopId])
+  @@index([entitlementType])
+  @@map("generation_usages")
+}
+
+model PaidCreditLedger {
+  id              String   @id @default(uuid()) @db.Uuid
+  userId          String   @db.Uuid
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  delta           Int
+  reason          String
+  stripeSessionId String?
+  createdAt       DateTime @default(now())
+
+  @@index([userId])
+  @@index([reason])
+  @@map("paid_credit_ledger")
+}
+
+model Subscription {
+  id                   String    @id @default(uuid()) @db.Uuid
+  userId               String    @db.Uuid
+  user                 User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider             String    @default("stripe")
+  stripeSubscriptionId String?   @unique
+  status               String
+  currentPeriodEnd     DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  canceledAt           DateTime?
+
+  @@index([userId])
+  @@index([status])
+  @@map("subscriptions")
 }
 
 model AuthSession {

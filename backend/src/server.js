@@ -43,8 +43,10 @@ let databaseBootstrapStatus = {
 app.post("/api/billing/stripe-webhook", express.raw({ type: "application/json" }), async (request, response) => {
   try {
     const event = buildStripeEvent(request);
-    await recordBillingEvent(event);
-    await handleStripeEvent(event);
+    const isNewEvent = await recordBillingEvent(event);
+    if (isNewEvent) {
+      await handleStripeEvent(event);
+    }
     response.json({ received: true });
   } catch (error) {
     console.error("Stripe webhook failed", error);
@@ -52,7 +54,7 @@ app.post("/api/billing/stripe-webhook", express.raw({ type: "application/json" }
   }
 });
 
-app.use(express.json({ limit: "96kb" }));
+app.use(express.json({ limit: "512kb" }));
 app.use(
   cors({
     origin(origin, callback) {
@@ -170,6 +172,59 @@ app.get("/api/me", async (request, response) => {
   }
 });
 
+app.get("/api/entitlements", async (request, response) => {
+  try {
+    const session = await authenticateRequest(request);
+    const usage = await getUserUsageSummary(session.user.id);
+    response.json({
+      user: publicUser(session.user),
+      entitlements: buildEntitlements(session.user),
+      usage,
+    });
+  } catch (error) {
+    sendAuthError(response, error);
+  }
+});
+
+app.post("/api/tabletops/generate", async (request, response) => {
+  try {
+    const session = await authenticateRequest(request);
+    const exercise = sanitizeExercisePayload(request.body?.exercise);
+    if (!exercise) {
+      response.status(400).json({ error: "Generated tabletop package is required." });
+      return;
+    }
+
+    const options = request.body?.options && typeof request.body.options === "object" ? request.body.options : {};
+    const title = buildTabletopTitle(exercise, options);
+    const tabletop = await consumeGenerationEntitlement(session.user.id, {
+      title,
+      generationSource: exercise ? "local_template" : "server_ai",
+      exercise,
+      metadata: {
+        industry: asLimitedString(exercise?.overview?.industry || options.industry, 120),
+        scenarioType: asLimitedString(exercise?.overview?.scenario || options.scenarioType, 160),
+        maturityLevel: asLimitedString(exercise?.overview?.maturityLevel || options.maturityLevel, 80),
+      },
+    });
+    const user = await getUserById(session.user.id);
+
+    response.json({
+      tabletopId: tabletop.id,
+      exercise,
+      user: publicUser(user),
+      entitlements: buildEntitlements(user),
+    });
+  } catch (error) {
+    if (error.statusCode === 402) {
+      response.status(402).json({ error: error.message, code: "PAYMENT_REQUIRED" });
+      return;
+    }
+
+    sendAuthError(response, error);
+  }
+});
+
 app.post("/api/tabletops/consume-generation", async (request, response) => {
   try {
     const session = await authenticateRequest(request);
@@ -177,6 +232,12 @@ app.post("/api/tabletops/consume-generation", async (request, response) => {
     const tabletop = await consumeGenerationEntitlement(session.user.id, {
       title,
       generationSource: "local",
+      exercise: null,
+      metadata: {
+        industry: asLimitedString(request.body?.industry, 120),
+        scenarioType: asLimitedString(request.body?.scenarioType, 160),
+        maturityLevel: asLimitedString(request.body?.maturityLevel, 80),
+      },
     });
     const user = await getUserById(session.user.id);
 
@@ -367,7 +428,7 @@ async function authenticateRequest(request) {
   return { user: result.rows[0] };
 }
 
-async function consumeGenerationEntitlement(userId, { title, generationSource }) {
+async function consumeGenerationEntitlement(userId, { title, generationSource, exercise, metadata = {} }) {
   const client = await pool.connect();
 
   try {
@@ -388,6 +449,7 @@ async function consumeGenerationEntitlement(userId, { title, generationSource })
     const hasSubscription = ACTIVE_SUBSCRIPTION_STATUSES.has(user.subscriptionStatus);
     const hasPurchasedCredit = user.generationCredits > 0;
     const hasFreeCredit = user.freeGenerationsRemaining > 0;
+    let entitlementType = "subscription";
 
     if (!hasSubscription && !hasPurchasedCredit && !hasFreeCredit) {
       throw Object.assign(new Error("You have used your free tabletop. Buy one tabletop or start a subscription to generate more."), {
@@ -396,11 +458,18 @@ async function consumeGenerationEntitlement(userId, { title, generationSource })
     }
 
     if (!hasSubscription && hasPurchasedCredit) {
+      entitlementType = "paid_credit";
       await client.query(
         `UPDATE "users" SET "generationCredits" = "generationCredits" - 1, "updatedAt" = NOW() WHERE "id" = $1`,
         [userId],
       );
+      await client.query(
+        `INSERT INTO "paid_credit_ledger" ("id", "userId", "delta", "reason")
+         VALUES ($1, $2, -1, 'generation_redeemed')`,
+        [crypto.randomUUID(), userId],
+      );
     } else if (!hasSubscription && hasFreeCredit) {
+      entitlementType = "free";
       await client.query(
         `UPDATE "users" SET "freeGenerationsRemaining" = "freeGenerationsRemaining" - 1, "updatedAt" = NOW() WHERE "id" = $1`,
         [userId],
@@ -409,9 +478,26 @@ async function consumeGenerationEntitlement(userId, { title, generationSource })
 
     const tabletopId = crypto.randomUUID();
     await client.query(
-      `INSERT INTO "tabletops" ("id", "userId", "title", "status", "generationSource", "updatedAt")
-       VALUES ($1, $2, $3, 'generated', $4, NOW())`,
-      [tabletopId, userId, title || "Untitled tabletop", generationSource],
+      `INSERT INTO "tabletops" (
+         "id", "userId", "title", "status", "generationSource", "exerciseJson",
+         "industry", "scenarioType", "maturityLevel", "updatedAt"
+       )
+       VALUES ($1, $2, $3, 'generated', $4, $5, $6, $7, $8, NOW())`,
+      [
+        tabletopId,
+        userId,
+        title || "Untitled tabletop",
+        generationSource,
+        exercise,
+        metadata.industry || null,
+        metadata.scenarioType || null,
+        metadata.maturityLevel || null,
+      ],
+    );
+    await client.query(
+      `INSERT INTO "generation_usages" ("id", "userId", "tabletopId", "entitlementType")
+       VALUES ($1, $2, $3, $4)`,
+      [crypto.randomUUID(), userId, tabletopId, entitlementType],
     );
 
     await client.query("COMMIT");
@@ -466,6 +552,24 @@ async function getUserById(userId) {
   }
 
   return result.rows[0];
+}
+
+async function getUserUsageSummary(userId) {
+  const result = await dbQuery(
+    `SELECT "entitlementType", COUNT(*)::int AS "count"
+     FROM "generation_usages"
+     WHERE "userId" = $1
+     GROUP BY "entitlementType"`,
+    [userId],
+  );
+
+  return {
+    totalGenerations: result.rows.reduce((total, row) => total + Number(row.count), 0),
+    byEntitlement: result.rows.reduce((summary, row) => {
+      summary[row.entitlementType] = Number(row.count);
+      return summary;
+    }, {}),
+  };
 }
 
 async function findUsableLoginCode(email) {
@@ -545,6 +649,13 @@ async function handleStripeEvent(event) {
          WHERE "id" = $1`,
         [userId, session.customer],
       );
+      await dbQuery(
+        `INSERT INTO "subscriptions" ("id", "userId", "stripeSubscriptionId", "status", "updatedAt")
+         VALUES ($1, $2, $3, 'active', NOW())
+         ON CONFLICT ("stripeSubscriptionId") DO UPDATE
+         SET "status" = 'active', "updatedAt" = NOW()`,
+        [crypto.randomUUID(), userId, session.subscription || null],
+      );
       return;
     }
 
@@ -553,6 +664,11 @@ async function handleStripeEvent(event) {
        SET "generationCredits" = "generationCredits" + 1, "stripeCustomerId" = COALESCE("stripeCustomerId", $2), "updatedAt" = NOW()
        WHERE "id" = $1`,
       [userId, session.customer],
+    );
+    await dbQuery(
+      `INSERT INTO "paid_credit_ledger" ("id", "userId", "delta", "reason", "stripeSessionId")
+       VALUES ($1, $2, 1, 'stripe_checkout_completed', $3)`,
+      [crypto.randomUUID(), userId, session.id || null],
     );
   }
 
@@ -566,21 +682,34 @@ async function handleStripeEvent(event) {
        WHERE "stripeCustomerId" = $1`,
       [subscription.customer, subscription.status, Array.from(ACTIVE_SUBSCRIPTION_STATUSES)],
     );
+    await dbQuery(
+      `UPDATE "subscriptions"
+       SET "status" = $2, "currentPeriodEnd" = $3, "canceledAt" = CASE WHEN $2 = 'canceled' THEN NOW() ELSE "canceledAt" END, "updatedAt" = NOW()
+       WHERE "stripeSubscriptionId" = $1`,
+      [
+        subscription.id,
+        subscription.status,
+        subscription.current_period_end ? new Date(subscription.current_period_end * 1000) : null,
+      ],
+    );
   }
 }
 
 async function recordBillingEvent(event) {
   if (!pool) {
-    return;
+    return true;
   }
 
   const userId = event.data?.object?.metadata?.userId || null;
-  await dbQuery(
+  const result = await dbQuery(
     `INSERT INTO "billing_events" ("id", "userId", "stripeEventId", "eventType", "payloadJson")
      VALUES ($1, $2, $3, $4, $5)
-     ON CONFLICT ("stripeEventId") DO NOTHING`,
+     ON CONFLICT ("stripeEventId") DO NOTHING
+     RETURNING "id"`,
     [crypto.randomUUID(), userId, event.id || null, event.type || "unknown", event],
   );
+
+  return result.rowCount > 0;
 }
 
 function publicUser(user) {
@@ -608,6 +737,26 @@ function buildEntitlements(user) {
     subscriptionStatus,
     billingPlan: user.billingPlan ?? "free",
   };
+}
+
+function sanitizeExercisePayload(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const serialized = JSON.stringify(value);
+  if (serialized.length > 350_000) {
+    const error = new Error("Generated tabletop package is too large to store.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  return JSON.parse(serialized);
+}
+
+function buildTabletopTitle(exercise, options) {
+  const organization = asLimitedString(exercise?.overview?.organization || options.organizationName || options.organization, 120);
+  return organization ? `${organization} Tabletop Exercise` : "Untitled tabletop";
 }
 
 async function dbQuery(sql, params = []) {
@@ -641,6 +790,10 @@ async function ensureSaasSchema() {
       "title" TEXT NOT NULL,
       "status" TEXT NOT NULL DEFAULT 'draft',
       "generationSource" TEXT NOT NULL DEFAULT 'local',
+      "exerciseJson" JSONB,
+      "scenarioType" TEXT,
+      "industry" TEXT,
+      "maturityLevel" TEXT,
       "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
       "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
       "deletedAt" TIMESTAMP(3),
@@ -721,6 +874,10 @@ async function ensureSaasSchema() {
     `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "subscriptionStatus" TEXT NOT NULL DEFAULT 'none'`,
     `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP`,
     `ALTER TABLE "tabletops" ADD COLUMN IF NOT EXISTS "generationSource" TEXT NOT NULL DEFAULT 'local'`,
+    `ALTER TABLE "tabletops" ADD COLUMN IF NOT EXISTS "exerciseJson" JSONB`,
+    `ALTER TABLE "tabletops" ADD COLUMN IF NOT EXISTS "scenarioType" TEXT`,
+    `ALTER TABLE "tabletops" ADD COLUMN IF NOT EXISTS "industry" TEXT`,
+    `ALTER TABLE "tabletops" ADD COLUMN IF NOT EXISTS "maturityLevel" TEXT`,
     `ALTER TABLE "ai_runs" ADD COLUMN IF NOT EXISTS "userId" UUID`,
     `CREATE TABLE IF NOT EXISTS "auth_sessions" (
       "id" UUID NOT NULL,
@@ -750,6 +907,35 @@ async function ensureSaasSchema() {
       "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
       CONSTRAINT "billing_events_pkey" PRIMARY KEY ("id")
     )`,
+    `CREATE TABLE IF NOT EXISTS "generation_usages" (
+      "id" UUID NOT NULL,
+      "userId" UUID NOT NULL,
+      "tabletopId" UUID,
+      "entitlementType" TEXT NOT NULL,
+      "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "generation_usages_pkey" PRIMARY KEY ("id")
+    )`,
+    `CREATE TABLE IF NOT EXISTS "paid_credit_ledger" (
+      "id" UUID NOT NULL,
+      "userId" UUID NOT NULL,
+      "delta" INTEGER NOT NULL,
+      "reason" TEXT NOT NULL,
+      "stripeSessionId" TEXT,
+      "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "paid_credit_ledger_pkey" PRIMARY KEY ("id")
+    )`,
+    `CREATE TABLE IF NOT EXISTS "subscriptions" (
+      "id" UUID NOT NULL,
+      "userId" UUID NOT NULL,
+      "provider" TEXT NOT NULL DEFAULT 'stripe',
+      "stripeSubscriptionId" TEXT,
+      "status" TEXT NOT NULL,
+      "currentPeriodEnd" TIMESTAMP(3),
+      "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "canceledAt" TIMESTAMP(3),
+      CONSTRAINT "subscriptions_pkey" PRIMARY KEY ("id")
+    )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS "users_stripeCustomerId_key" ON "users"("stripeCustomerId")`,
     `CREATE UNIQUE INDEX IF NOT EXISTS "auth_sessions_tokenHash_key" ON "auth_sessions"("tokenHash")`,
     `CREATE INDEX IF NOT EXISTS "auth_sessions_userId_idx" ON "auth_sessions"("userId")`,
@@ -762,6 +948,14 @@ async function ensureSaasSchema() {
     `CREATE UNIQUE INDEX IF NOT EXISTS "billing_events_stripeEventId_key" ON "billing_events"("stripeEventId")`,
     `CREATE INDEX IF NOT EXISTS "billing_events_userId_idx" ON "billing_events"("userId")`,
     `CREATE INDEX IF NOT EXISTS "billing_events_eventType_idx" ON "billing_events"("eventType")`,
+    `CREATE INDEX IF NOT EXISTS "generation_usages_userId_idx" ON "generation_usages"("userId")`,
+    `CREATE INDEX IF NOT EXISTS "generation_usages_tabletopId_idx" ON "generation_usages"("tabletopId")`,
+    `CREATE INDEX IF NOT EXISTS "generation_usages_entitlementType_idx" ON "generation_usages"("entitlementType")`,
+    `CREATE INDEX IF NOT EXISTS "paid_credit_ledger_userId_idx" ON "paid_credit_ledger"("userId")`,
+    `CREATE INDEX IF NOT EXISTS "paid_credit_ledger_reason_idx" ON "paid_credit_ledger"("reason")`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "subscriptions_stripeSubscriptionId_key" ON "subscriptions"("stripeSubscriptionId")`,
+    `CREATE INDEX IF NOT EXISTS "subscriptions_userId_idx" ON "subscriptions"("userId")`,
+    `CREATE INDEX IF NOT EXISTS "subscriptions_status_idx" ON "subscriptions"("status")`,
     `CREATE INDEX IF NOT EXISTS "ai_runs_userId_idx" ON "ai_runs"("userId")`,
     `DO $$ BEGIN
       IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'auth_sessions_userId_fkey') THEN
@@ -781,6 +975,26 @@ async function ensureSaasSchema() {
     `DO $$ BEGIN
       IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'billing_events_userId_fkey') THEN
         ALTER TABLE "billing_events" ADD CONSTRAINT "billing_events_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+      END IF;
+    END $$`,
+    `DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'generation_usages_userId_fkey') THEN
+        ALTER TABLE "generation_usages" ADD CONSTRAINT "generation_usages_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+      END IF;
+    END $$`,
+    `DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'generation_usages_tabletopId_fkey') THEN
+        ALTER TABLE "generation_usages" ADD CONSTRAINT "generation_usages_tabletopId_fkey" FOREIGN KEY ("tabletopId") REFERENCES "tabletops"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+      END IF;
+    END $$`,
+    `DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'paid_credit_ledger_userId_fkey') THEN
+        ALTER TABLE "paid_credit_ledger" ADD CONSTRAINT "paid_credit_ledger_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+      END IF;
+    END $$`,
+    `DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'subscriptions_userId_fkey') THEN
+        ALTER TABLE "subscriptions" ADD CONSTRAINT "subscriptions_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
       END IF;
     END $$`,
   ];

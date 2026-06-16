@@ -10,13 +10,15 @@ POST /api/auth/request-code
 POST /api/auth/verify-code
 POST /api/auth/logout
 GET  /api/me
+GET  /api/entitlements
+POST /api/tabletops/generate
 POST /api/tabletops/consume-generation
 POST /api/billing/create-checkout-session
 POST /api/billing/stripe-webhook
 POST /api/ai/generate-inject
 ```
 
-Account endpoints require `DATABASE_URL`. The generation entitlement endpoint consumes one free generation, one purchased generation credit, or allows generation for an active subscription.
+Account endpoints require `DATABASE_URL`. The generation endpoint stores a user-owned tabletop in PostgreSQL and consumes one free generation, one purchased generation credit, or allows generation for an active subscription. `POST /api/tabletops/consume-generation` remains as a compatibility route while the product moves to `/api/tabletops/generate`.
 
 `POST /api/ai/generate-inject` accepts either a signed-in account session:
 
@@ -206,7 +208,7 @@ For GitHub Pages, `.github/workflows/deploy-pages.yml` sets this during the stat
 
 AI injects are optional in the session UI. If the OpenAI account has no credits, the backend is unavailable, or the access code is wrong, the frontend falls back to the built-in scenario twists so the exercise can keep running.
 
-For the paid-product flow, the frontend signs users in through the backend and calls `/api/tabletops/consume-generation` before it starts a new tabletop. The frontend sends metadata such as organization, industry, scenario, maturity, and whether an IRP was present, but it does not send or store raw uploaded IRP contents.
+For the paid-product flow, the frontend signs users in through the backend and calls `/api/tabletops/generate` to store the generated package after entitlement checks. The frontend sends the generated tabletop output and metadata, but it does not send or store raw uploaded IRP contents.
 
 The access code is now mainly a testing fallback. The production direction is account sessions plus Stripe-backed entitlements.
 

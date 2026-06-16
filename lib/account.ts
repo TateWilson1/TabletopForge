@@ -1,6 +1,6 @@
 "use client";
 
-import type { ExerciseOptions } from "@/lib/types";
+import type { ExerciseOptions, GeneratedExercise } from "@/lib/types";
 
 const TOKEN_STORAGE_KEY = "tabletopforge.sessionToken";
 const API_URL = (process.env.NEXT_PUBLIC_TABLETOPFORGE_API_URL || "").replace(/\/$/, "");
@@ -84,20 +84,29 @@ export async function signOut() {
   }
 }
 
-export async function consumeGeneration(options: ExerciseOptions): Promise<AccountState & { tabletopId: string }> {
-  return apiFetch("/api/tabletops/consume-generation", {
+export async function generateTabletop(
+  options: ExerciseOptions,
+  exercise: GeneratedExercise,
+): Promise<AccountState & { tabletopId: string; exercise: GeneratedExercise }> {
+  return apiFetch("/api/tabletops/generate", {
     method: "POST",
     auth: true,
     body: JSON.stringify({
-      title: `${options.organizationName.trim()} Tabletop Exercise`,
-      organization: options.organizationName,
-      industry: options.industry,
-      organizationSize: options.organizationSize,
-      scenarioType: options.scenarioType,
-      maturityLevel: options.maturityLevel,
-      exerciseDuration: options.exerciseDuration,
-      hasIrp: Boolean(options.irpText?.trim()),
-      irpFileName: options.irpFileName || "",
+      options: {
+        organizationName: options.organizationName,
+        industry: options.industry,
+        organizationSize: options.organizationSize,
+        scenarioType: options.scenarioType,
+        maturityLevel: options.maturityLevel,
+        exerciseDuration: options.exerciseDuration,
+        includeExecutiveQuestions: options.includeExecutiveQuestions,
+        includeTechnicalQuestions: options.includeTechnicalQuestions,
+        includeComplianceQuestions: options.includeComplianceQuestions,
+        includeLessonsLearned: options.includeLessonsLearned,
+        hasIrp: Boolean(options.irpText?.trim()),
+        irpFileName: options.irpFileName || "",
+      },
+      exercise,
     }),
   });
 }

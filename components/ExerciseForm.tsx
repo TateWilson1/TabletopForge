@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { AccountPanel } from "@/components/AccountPanel";
-import { consumeGeneration, isAccountApiConfigured, type AccountState } from "@/lib/account";
+import { generateTabletop, isAccountApiConfigured, type AccountState } from "@/lib/account";
 import { generateExercise } from "@/lib/generator";
 import { saveExercise } from "@/lib/storage";
 import {
@@ -96,12 +96,14 @@ export function ExerciseForm() {
     setIsGenerating(true);
     setError("");
 
-    let tabletopId = "";
+    const generatedExercise = generateExercise({ ...options, hasHumanFacilitator: false });
+    let generated = generatedExercise;
+
     if (accountApiConfigured) {
       try {
-        const entitlement = await consumeGeneration(options);
-        tabletopId = entitlement.tabletopId;
-        setAccount({ user: entitlement.user, entitlements: entitlement.entitlements });
+        const result = await generateTabletop(options, generatedExercise);
+        generated = { ...generatedExercise, id: result.tabletopId };
+        setAccount({ user: result.user, entitlements: result.entitlements });
       } catch (requestError) {
         setIsGenerating(false);
         setError(requestError instanceof Error ? requestError.message : "Could not start generation.");
@@ -109,8 +111,6 @@ export function ExerciseForm() {
       }
     }
 
-    const generatedExercise = generateExercise({ ...options, hasHumanFacilitator: false });
-    const generated = tabletopId ? { ...generatedExercise, id: tabletopId } : generatedExercise;
     saveExercise(generated);
     setSavedNotice("Exercise generated and saved in this browser.");
     router.push(`/session?id=${encodeURIComponent(generated.id)}`);
@@ -126,7 +126,7 @@ export function ExerciseForm() {
               <CardDescription>Choose the business context and tabletop scope.</CardDescription>
             </div>
             <Badge variant="outline" className="hidden border-primary/40 text-primary sm:inline-flex">
-              Local only
+              Account gated
             </Badge>
           </div>
         </CardHeader>
