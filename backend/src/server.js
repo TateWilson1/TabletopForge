@@ -1061,7 +1061,17 @@ function getAllowedOrigins() {
 }
 
 function getPublicAppUrl(request) {
-  return (process.env.PUBLIC_APP_URL || request.get("origin") || "https://tatewilson1.github.io/TabletopForge").replace(/\/$/, "");
+  const configuredUrl = process.env.PUBLIC_APP_URL?.trim();
+  if (configuredUrl) {
+    return configuredUrl.replace(/\/$/, "");
+  }
+
+  const origin = request.get("origin")?.replace(/\/$/, "");
+  if (origin === "https://tatewilson1.github.io") {
+    return `${origin}/TabletopForge`;
+  }
+
+  return (origin || "https://tatewilson1.github.io/TabletopForge").replace(/\/$/, "");
 }
 
 function getAuthDeliveryMode() {
