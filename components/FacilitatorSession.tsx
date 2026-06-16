@@ -25,7 +25,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { getStoredSessionToken } from "@/lib/account";
 import { buildCompletedSessionHtmlReport, downloadTextFile, safeFilename } from "@/lib/report-export";
@@ -81,19 +80,17 @@ interface AiAssistResponse {
   missingInfo?: string[];
 }
 
-type FocusStageId = "brief" | "facts" | "decision" | "question" | "evolution" | "capture";
+type FocusStageId = "brief" | "facts" | "decision" | "question" | "capture";
 
 const focusStages: Array<{ id: FocusStageId; label: string }> = [
   { id: "brief", label: "Situation" },
   { id: "facts", label: "Knowns" },
   { id: "decision", label: "Decision" },
   { id: "question", label: "Discuss" },
-  { id: "evolution", label: "Twist" },
   { id: "capture", label: "Capture" },
 ];
 
 const TABLETOPFORGE_API_URL = (process.env.NEXT_PUBLIC_TABLETOPFORGE_API_URL || "").replace(/\/$/, "");
-const AI_ENABLED_STORAGE_KEY = "tabletopforge.aiInjectsEnabled";
 const AI_ACCESS_CODE_STORAGE_KEY = "tabletopforge.aiAccessCode";
 
 export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }) {
@@ -115,10 +112,8 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
   const [isRollingDice, setIsRollingDice] = useState(false);
   const [rollingValue, setRollingValue] = useState(1);
   const [promptIndexes, setPromptIndexes] = useState<Record<string, number>>({});
-  const [aiInjectsEnabled, setAiInjectsEnabled] = useState(false);
   const [aiAccessCode, setAiAccessCode] = useState("");
   const [hasSessionToken, setHasSessionToken] = useState(false);
-  const [aiInjectNotice, setAiInjectNotice] = useState("");
   const [assistantQuestion, setAssistantQuestion] = useState("");
   const [assistantAnswer, setAssistantAnswer] = useState("");
   const [assistantNotice, setAssistantNotice] = useState("");
@@ -147,9 +142,10 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
   const activePromptIndex = Math.min(promptIndexes[activeStep.title] ?? 0, Math.max(0, activeStep.prompts.length - 1));
   const activePrompt = activeStep.prompts[activePromptIndex] ?? "";
   const activeFocus = focusStages[activeFocusIndex] ?? focusStages[0];
+  const nextFocusLabel = focusStages[activeFocusIndex + 1]?.label ?? "";
   const activeDecisionIndex = Math.min(decisionIndexes[activeStep.title] ?? 0, Math.max(0, activeStep.decisions.length - 1));
   const activeDecision = activeStep.decisions[activeDecisionIndex] ?? "Confirm the next decision the team needs to make.";
-  const canUseAiInjects = aiInjectsEnabled && TABLETOPFORGE_API_URL.length > 0 && (hasSessionToken || aiAccessCode.trim().length > 0);
+  const canUseAiInjects = TABLETOPFORGE_API_URL.length > 0 && (hasSessionToken || aiAccessCode.trim().length > 0);
 
   const clearDiceTimers = useCallback(() => {
     if (diceIntervalRef.current !== null) {
@@ -164,18 +160,16 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
   }, []);
 
   useEffect(() => {
-    setInjectTimerSeconds(buildInjectTimerSeconds(activeStep.duration));
+    setInjectTimerSeconds(buildRandomInjectTimerSeconds(activeStep.duration));
     setDiceRoll(null);
     setIsRollingDice(false);
     setRollingValue(1);
-    setAiInjectNotice("");
     setActiveFocusIndex(0);
     setFacilitatorHint("");
     clearDiceTimers();
   }, [activeStep.duration, activeStep.title, clearDiceTimers]);
 
   useEffect(() => {
-    setAiInjectsEnabled(window.localStorage.getItem(AI_ENABLED_STORAGE_KEY) === "true");
     setAiAccessCode(window.localStorage.getItem(AI_ACCESS_CODE_STORAGE_KEY) ?? "");
     setHasSessionToken(Boolean(getStoredSessionToken()));
   }, []);
@@ -204,7 +198,6 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
 
     clearDiceTimers();
     setDiceRoll(null);
-    setAiInjectNotice("");
     setIsRollingDice(true);
     setRollingValue(((hashSeed(`${nextInject.id}:start`) % 20) + 1));
 
@@ -226,13 +219,13 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
         sessionNotes,
         aiAccessCode,
         useAi: canUseAiInjects,
-        onNotice: setAiInjectNotice,
+        onNotice: () => undefined,
       });
       setRevealedInjects((current) =>
         current.some((inject) => inject.id === nextInject.id) ? current : [...current, { ...resolvedInject, stepTitle: activeStep.title }],
       );
       setDiceRoll({ value: finalValue, injectText: resolvedInject.text });
-      setInjectTimerSeconds(availableInjects.length > 1 ? buildInjectTimerSeconds(activeStep.duration) : 0);
+      setInjectTimerSeconds(availableInjects.length > 1 ? buildRandomInjectTimerSeconds(activeStep.duration) : 0);
       setIsRollingDice(false);
     }, 900);
   }, [
@@ -287,7 +280,7 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
     setExportNotice("");
     setCompletedSession(null);
     setIsPaused(false);
-    setInjectTimerSeconds(buildInjectTimerSeconds(steps[0]?.duration ?? "5 min"));
+    setInjectTimerSeconds(buildRandomInjectTimerSeconds(steps[0]?.duration ?? "5 min"));
   }
 
   function toggleDecision(decision: string, checked: boolean) {
@@ -359,18 +352,6 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
     } finally {
       setIsAssistantThinking(false);
     }
-  }
-
-  function updateAiInjectsEnabled(checked: boolean) {
-    setAiInjectsEnabled(checked);
-    window.localStorage.setItem(AI_ENABLED_STORAGE_KEY, String(checked));
-    setAiInjectNotice(checked ? "AI injects enabled. Built-in injects are still used if AI is unavailable." : "");
-  }
-
-  function updateAiAccessCode(value: string) {
-    setAiAccessCode(value);
-    window.localStorage.setItem(AI_ACCESS_CODE_STORAGE_KEY, value);
-    setAiInjectNotice("");
   }
 
   async function copySessionSummary() {
@@ -548,10 +529,10 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
                   <div className="flex gap-2">
                     <Button variant="outline" size="sm" onClick={() => moveDecision(-1)} disabled={activeDecisionIndex === 0}>
                       <ChevronLeft className="size-4" suppressHydrationWarning />
-                      Previous
+                      Previous Decision
                     </Button>
                     <Button variant="outline" size="sm" onClick={() => moveDecision(1)} disabled={activeDecisionIndex >= activeStep.decisions.length - 1}>
-                      Next
+                      Next Decision
                       <ChevronRight className="size-4" suppressHydrationWarning />
                     </Button>
                   </div>
@@ -593,52 +574,6 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
                 onBack={() => movePrompt(-1)}
                 onNext={() => movePrompt(1)}
               />
-            ) : null}
-
-            {activeFocus.id === "evolution" ? (
-              <section className="rounded-md border border-accent/35 bg-accent/10 p-5">
-                <div className="space-y-4">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                      <h3 className="font-semibold">Scenario Twist</h3>
-                      <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                        {availableInjects.length > 0
-                          ? `The next twist drops in ${formatSeconds(injectTimerSeconds)}. Roll now if the room is ready for pressure.`
-                          : "No more twists are queued for this section."}
-                      </p>
-                    </div>
-                    <Button onClick={triggerInjectRoll} disabled={availableInjects.length === 0 || isRollingDice || Boolean(diceRoll)}>
-                      <Dices className="size-4" suppressHydrationWarning />
-                      {isRollingDice ? "Rolling..." : "Roll Now"}
-                    </Button>
-                  </div>
-
-                  <div className="grid gap-3 rounded-md border border-border/70 bg-background/40 p-3 md:grid-cols-[0.85fr_1.15fr]">
-                    <label className="flex items-start gap-3 text-sm leading-6 text-muted-foreground">
-                      <Checkbox checked={aiInjectsEnabled} onCheckedChange={(value) => updateAiInjectsEnabled(value === true)} className="mt-1" />
-                      <span>
-                        <span className="block font-medium text-foreground">Use AI twists</span>
-                        <span>
-                          {TABLETOPFORGE_API_URL
-                            ? "Uses your signed-in account or access code, and falls back automatically if AI is unavailable."
-                            : "Backend URL is not configured for this build."}
-                        </span>
-                      </span>
-                    </label>
-                    <Input
-                      type="password"
-                      value={aiAccessCode}
-                      onChange={(event) => updateAiAccessCode(event.target.value)}
-                      placeholder="Temporary AI access code"
-                      disabled={!aiInjectsEnabled}
-                    />
-                  </div>
-                  {aiInjectNotice ? <p className="text-sm leading-6 text-muted-foreground">{aiInjectNotice}</p> : null}
-                  {!aiInjectNotice && aiInjectsEnabled && !hasSessionToken && !aiAccessCode.trim() ? (
-                    <p className="text-sm leading-6 text-muted-foreground">Sign in or enter the temporary access code to try AI-generated twists.</p>
-                  ) : null}
-                </div>
-              </section>
             ) : null}
 
             {activeFocus.id === "capture" ? (
@@ -697,7 +632,7 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
               </Button>
               {activeFocusIndex < focusStages.length - 1 ? (
                 <Button onClick={() => moveFocus(1)}>
-                  Continue
+                  Go To {nextFocusLabel}
                   <ChevronRight className="size-4" suppressHydrationWarning />
                 </Button>
               ) : activeIndex === steps.length - 1 ? (
@@ -707,7 +642,7 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
                 </Button>
               ) : (
                 <Button onClick={() => moveStep(1)}>
-                  Next
+                  Next Section
                   <ChevronRight className="size-4" suppressHydrationWarning />
                 </Button>
               )}
@@ -851,10 +786,10 @@ function PromptCard({
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={onBack} disabled={currentIndex === 0}>
             <ChevronLeft className="size-4" suppressHydrationWarning />
-            Previous
+            Previous Question
           </Button>
           <Button variant="outline" size="sm" onClick={onNext} disabled={currentIndex >= total - 1}>
-            Next
+            Next Question
             <ChevronRight className="size-4" suppressHydrationWarning />
           </Button>
         </div>
@@ -1947,14 +1882,15 @@ function buildInjectTimerSeconds(duration: string) {
   return Math.max(45, Math.min(300, baseSeconds));
 }
 
-function buildDiceRoll(inject: Inject) {
-  return (hashSeed(inject.id) % 20) + 1;
+function buildRandomInjectTimerSeconds(duration: string) {
+  const baseSeconds = buildInjectTimerSeconds(duration);
+  const minSeconds = Math.max(30, Math.round(baseSeconds * 0.65));
+  const maxSeconds = Math.max(minSeconds + 15, Math.round(baseSeconds * 1.35));
+  return Math.min(360, minSeconds + Math.floor(Math.random() * (maxSeconds - minSeconds + 1)));
 }
 
-function formatSeconds(totalSeconds: number) {
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+function buildDiceRoll(inject: Inject) {
+  return (hashSeed(inject.id) % 20) + 1;
 }
 
 function decisionKey(stepTitle: string, decision: string) {
