@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import {
   Award,
   Bot,
@@ -392,8 +393,11 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
     setIsPaused(false);
   }
 
+  const currentSlideNumber = activeIndex * focusStages.length + activeFocusIndex + 1;
+  const totalSlideCount = steps.length * focusStages.length;
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <InjectOverlay
         diceRoll={diceRoll}
         isRolling={isRollingDice}
@@ -401,51 +405,26 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
         onDismiss={() => setDiceRoll(null)}
       />
 
-      <div className="grid gap-4 xl:grid-cols-[0.7fr_1.3fr]">
-        <div className="space-y-4">
-          <Card className="bg-background/45">
-            <CardHeader>
-              <div className="flex items-center justify-between gap-3">
-                <CardTitle className="text-lg">Session Flow</CardTitle>
-                <Badge variant="outline">App-led</Badge>
-              </div>
-              <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted">
-                <div className="h-full bg-primary transition-all" style={{ width: `${progress}%` }} />
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {steps.map((step, index) => (
-                <button
-                  key={step.title}
-                  className={`w-full rounded-md border p-3 text-left transition ${
-                    index === activeIndex
-                      ? "border-primary bg-primary/10 text-foreground"
-                      : "border-border bg-background/40 text-muted-foreground hover:bg-muted"
-                  }`}
-                  onClick={() => setActiveIndex(index)}
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-sm font-medium">{step.label}</span>
-                    <span className="text-xs">{completedSteps[step.title] ? "Complete" : step.duration}</span>
-                  </div>
-                  <p className="mt-1 flex items-center gap-2 text-sm">
-                    {completedSteps[step.title] ? <CheckCircle2 className="size-4 text-primary" suppressHydrationWarning /> : null}
-                    {step.title}
-                  </p>
-                </button>
-              ))}
-            </CardContent>
-          </Card>
+      <div className="grid gap-4 xl:grid-cols-[15.5rem_minmax(0,1fr)_20rem]">
+        <SessionFlowRail
+          steps={steps}
+          activeIndex={activeIndex}
+          completedSteps={completedSteps}
+          progress={progress}
+          onSelect={(index) => {
+            setActiveIndex(index);
+            setActiveFocusIndex(0);
+            setFacilitatorHint("");
+          }}
+        />
 
-          <SessionNotesPanel sessionNotes={sessionNotes} onChange={setSessionNotes} />
-        </div>
-
-        <Card className="bg-card/90">
-          <CardHeader>
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <Card className="deck-stage overflow-hidden border-primary/20 bg-card/95">
+          <CardHeader className="border-b border-border/60 p-4 sm:p-5">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div>
-                <div className="mb-2 flex flex-wrap items-center gap-2">
+                <div className="mb-3 flex flex-wrap items-center gap-2">
                   <Badge variant="secondary">{activeStep.label}</Badge>
+                  <Badge variant="outline">Slide {currentSlideNumber} of {totalSlideCount}</Badge>
                   <Badge variant="outline">
                     <Clock className="mr-1 size-3" suppressHydrationWarning />
                     Suggested {activeStep.duration}
@@ -457,21 +436,25 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
                     {activeStep.pressure} pressure
                   </Badge>
                 </div>
-                <CardTitle>{activeStep.title}</CardTitle>
+                <CardTitle className="text-2xl sm:text-3xl">{activeStep.title}</CardTitle>
               </div>
               <div className="flex flex-wrap gap-2">
                 <Button variant="outline" onClick={() => setIsPaused((current) => !current)}>
                   {isPaused ? <Play className="size-4" suppressHydrationWarning /> : <Pause className="size-4" suppressHydrationWarning />}
                   {isPaused ? "Resume" : "Pause"}
                 </Button>
-                <Button variant="outline" onClick={resetSession}>
+                <Button variant="outline" onClick={() => setIsAssistantOpen((current) => !current)}>
+                  <Bot className="size-4" suppressHydrationWarning />
+                  AI Help
+                </Button>
+                <Button variant="outline" onClick={resetSession} aria-label="Reset session">
                   <RefreshCw className="size-4" suppressHydrationWarning />
-                  Reset
                 </Button>
               </div>
             </div>
           </CardHeader>
-          <CardContent className="space-y-6">
+
+          <CardContent className="space-y-5 p-4 sm:p-6">
             {isPaused ? (
               <section className="rounded-md border border-accent/35 bg-accent/10 p-4">
                 <div className="mb-2 flex items-center gap-2 text-sm font-medium text-accent">
@@ -498,165 +481,334 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
               onToggle={() => setIsAssistantOpen((current) => !current)}
             />
 
-            {activeFocus.id === "brief" ? (
-              <section className="space-y-4 rounded-md border border-primary/30 bg-primary/10 p-5">
-                <div>
-                  <div className="mb-2 flex items-center gap-2 text-sm font-medium text-primary">
-                    <Sparkles className="size-4" suppressHydrationWarning />
-                    TabletopForge Facilitator
-                  </div>
-                  <ReadingText text={activeStep.facilitatorScript} className="leading-7 text-muted-foreground" speed={32} />
-                </div>
-                {activeStep.scenarioBrief ? (
-                  <div className="rounded-md border border-border/70 bg-background/45 p-4">
-                    <div className="mb-2 text-sm font-medium text-foreground">Current Situation</div>
-                    <ReadingText text={activeStep.scenarioBrief} className="leading-7 text-muted-foreground" speed={18} />
-                  </div>
-                ) : (
-                  <div className="rounded-md border border-border/70 bg-background/45 p-4">
-                    <ReadingText text={knownFacts[0] ?? activeStep.pressureNote} className="leading-7 text-muted-foreground" speed={28} />
-                  </div>
-                )}
-                <div className="rounded-md border border-border/70 bg-background/45 p-4">
-                  <div className="text-sm font-medium text-foreground">Suggested Time</div>
-                  <ReadingText text={activeStep.pressureNote} className="mt-1 text-sm leading-6 text-muted-foreground" speed={30} />
-                </div>
-              </section>
-            ) : null}
+            <SlideFrame eyebrow={activeFocus.label} title={buildSlideTitle(activeFocus.id)}>
+              {activeFocus.id === "brief" ? (
+                <BriefSlide activeStep={activeStep} knownFacts={knownFacts} />
+              ) : null}
 
-            {activeFocus.id === "updates" ? (
-              <ScenarioUpdates
-                activeStepTitle={activeStep.title}
-                activeRevealedInjects={activeRevealedInjects}
-                revealedInjects={revealedInjects}
-              />
-            ) : null}
+              {activeFocus.id === "updates" ? (
+                <ScenarioUpdates
+                  activeStepTitle={activeStep.title}
+                  activeRevealedInjects={activeRevealedInjects}
+                  revealedInjects={revealedInjects}
+                />
+              ) : null}
 
-            {activeFocus.id === "facts" ? <TriageFacts knownFacts={knownFacts} unknowns={unknowns} /> : null}
+              {activeFocus.id === "facts" ? <TriageFacts knownFacts={knownFacts} unknowns={unknowns} /> : null}
 
-            {activeFocus.id === "decision" ? (
-              <section className="rounded-md border border-border bg-background/45 p-5">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div>
-                    <h3 className="font-semibold">Make One Decision</h3>
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      Decision {Math.min(activeDecisionIndex + 1, activeStep.decisions.length)} of {activeStep.decisions.length}
-                    </p>
-                  </div>
-                  <div className="flex gap-2">
-                    <Button variant="outline" size="sm" onClick={() => moveDecision(-1)} disabled={activeDecisionIndex === 0}>
-                      <ChevronLeft className="size-4" suppressHydrationWarning />
-                      Previous Decision
-                    </Button>
-                    <Button variant="outline" size="sm" onClick={() => moveDecision(1)} disabled={activeDecisionIndex >= activeStep.decisions.length - 1}>
-                      Next Decision
-                      <ChevronRight className="size-4" suppressHydrationWarning />
-                    </Button>
-                  </div>
-                </div>
-                <div className="mt-4 flex gap-3 rounded-md border border-primary/25 bg-primary/10 p-4">
-                  <Checkbox
-                    checked={decisionStatuses[decisionKey(activeStep.title, activeDecision)] === true}
-                    onCheckedChange={(value) => toggleDecision(activeDecision, value === true)}
-                    className="mt-1"
-                  />
-                  <div className="space-y-2">
-                    <ReadingText text={activeDecision} className="text-base leading-7 text-foreground" speed={34} />
-                    <Badge variant={decisionStatuses[decisionKey(activeStep.title, activeDecision)] ? "secondary" : "outline"}>
-                      {decisionStatuses[decisionKey(activeStep.title, activeDecision)] ? "Decided" : "Unresolved"}
-                    </Badge>
-                  </div>
-                </div>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  <Button variant="outline" onClick={() => askAssistant(`Help us decide: ${activeDecision}`)}>
-                    <Bot className="size-4" suppressHydrationWarning />
-                    Ask For Help
-                  </Button>
-                  <Button variant="outline" onClick={() => setFacilitatorHint(buildStuckHint(activeStep))}>
-                    <Lightbulb className="size-4" suppressHydrationWarning />
-                    The team is stuck
-                  </Button>
-                </div>
-                {facilitatorHint ? (
-                  <ReadingText text={facilitatorHint} className="mt-4 rounded-md bg-muted p-3 text-sm leading-6 text-muted-foreground" speed={26} />
-                ) : null}
-              </section>
-            ) : null}
+              {activeFocus.id === "decision" ? (
+                <DecisionSlide
+                  activeDecision={activeDecision}
+                  activeDecisionIndex={activeDecisionIndex}
+                  total={activeStep.decisions.length}
+                  isDecided={decisionStatuses[decisionKey(activeStep.title, activeDecision)] === true}
+                  facilitatorHint={facilitatorHint}
+                  onToggle={(checked) => toggleDecision(activeDecision, checked)}
+                  onPrevious={() => moveDecision(-1)}
+                  onNext={() => moveDecision(1)}
+                  onAsk={() => askAssistant(`Help us decide: ${activeDecision}`)}
+                  onStuck={() => setFacilitatorHint(buildStuckHint(activeStep))}
+                />
+              ) : null}
 
-            {activeFocus.id === "question" ? (
-              <PromptCard
-                prompt={activePrompt}
-                currentIndex={activePromptIndex}
-                total={activeStep.prompts.length}
-                onBack={() => movePrompt(-1)}
-                onNext={() => movePrompt(1)}
-              />
-            ) : null}
+              {activeFocus.id === "question" ? (
+                <PromptCard
+                  prompt={activePrompt}
+                  currentIndex={activePromptIndex}
+                  total={activeStep.prompts.length}
+                  onBack={() => movePrompt(-1)}
+                  onNext={() => movePrompt(1)}
+                />
+              ) : null}
 
-            {activeFocus.id === "capture" ? (
-              <section className="space-y-4 rounded-md border border-border bg-background/45 p-5">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="flex items-start gap-3">
-                    <Checkbox checked={completedSteps[activeStep.title] === true} onCheckedChange={(value) => toggleStepComplete(value === true)} className="mt-1" />
-                    <div>
-                      <p className="text-sm font-medium">Mark this section complete</p>
-                      <p className="mt-1 text-sm leading-6 text-muted-foreground">Capture only what matters: decisions, unanswered questions, and follow-up work.</p>
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <Button variant="outline" onClick={copySessionSummary}>
-                      <Clipboard className="size-4" suppressHydrationWarning />
-                      Copy Summary
-                    </Button>
-                    <Button variant="outline" onClick={downloadReadableSummary}>
-                      <Download className="size-4" suppressHydrationWarning />
-                      Download Report
-                    </Button>
-                  </div>
-                </div>
-                {exportNotice ? <p className="text-sm text-primary">{exportNotice}</p> : null}
-                <div className="rounded-md border border-border bg-background/45 p-4">
-                  <p className="text-sm font-medium">Notes stay open in the left panel.</p>
-                  <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                    Use the notes area throughout the exercise for improvements, decisions, unclear answers, and follow-up ideas.
-                  </p>
-                </div>
-              </section>
-            ) : null}
+              {activeFocus.id === "capture" ? (
+                <CaptureSlide
+                  isComplete={completedSteps[activeStep.title] === true}
+                  exportNotice={exportNotice}
+                  onComplete={(checked) => toggleStepComplete(checked)}
+                  onCopy={copySessionSummary}
+                  onDownload={downloadReadableSummary}
+                />
+              ) : null}
+            </SlideFrame>
 
-            <div className="flex flex-col gap-3 sm:flex-row sm:justify-between">
+            <div className="flex flex-col gap-3 border-t border-border/70 pt-4 sm:flex-row sm:items-center sm:justify-between">
               <Button
                 variant="outline"
                 onClick={() => (activeFocusIndex === 0 ? moveStep(-1) : moveFocus(-1))}
                 disabled={activeIndex === 0 && activeFocusIndex === 0}
               >
                 <ChevronLeft className="size-4" suppressHydrationWarning />
-                Back
+                Previous Slide
               </Button>
               {activeFocusIndex < focusStages.length - 1 ? (
                 <Button onClick={() => moveFocus(1)}>
-                  Go To {nextFocusLabel}
+                  Next Slide: {nextFocusLabel}
                   <ChevronRight className="size-4" suppressHydrationWarning />
                 </Button>
               ) : activeIndex === steps.length - 1 ? (
                 <Button onClick={endExercise}>
                   <Award className="size-4" suppressHydrationWarning />
-                  End Exercise
+                  Finish Exercise
                 </Button>
               ) : (
                 <Button onClick={() => moveStep(1)}>
-                  Next Section
+                  Next Module
                   <ChevronRight className="size-4" suppressHydrationWarning />
                 </Button>
               )}
             </div>
           </CardContent>
         </Card>
+
+        <div className="space-y-4">
+          <SessionNotesPanel sessionNotes={sessionNotes} onChange={setSessionNotes} />
+          <InjectTray activeRevealedInjects={activeRevealedInjects} revealedInjects={revealedInjects} />
+        </div>
       </div>
 
       {completedSession ? <Scorecard session={completedSession} /> : null}
     </div>
   );
+}
+
+function SessionFlowRail({
+  steps,
+  activeIndex,
+  completedSteps,
+  progress,
+  onSelect,
+}: {
+  steps: FacilitatorStep[];
+  activeIndex: number;
+  completedSteps: Record<string, boolean>;
+  progress: number;
+  onSelect: (index: number) => void;
+}) {
+  return (
+    <Card className="bg-background/45 xl:sticky xl:top-24 xl:self-start">
+      <CardHeader className="p-4">
+        <div className="flex items-center justify-between gap-3">
+          <CardTitle className="text-base">Modules</CardTitle>
+          <Badge variant="outline">App-led</Badge>
+        </div>
+        <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted">
+          <div className="h-full bg-primary transition-all" style={{ width: `${progress}%` }} />
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-2 p-4 pt-0">
+        {steps.map((step, index) => (
+          <button
+            key={step.title}
+            className={`w-full rounded-md border p-3 text-left transition ${
+              index === activeIndex
+                ? "border-primary bg-primary/10 text-foreground"
+                : "border-border bg-background/40 text-muted-foreground hover:bg-muted"
+            }`}
+            onClick={() => onSelect(index)}
+          >
+            <div className="flex items-center justify-between gap-3 text-xs">
+              <span>{step.label}</span>
+              <span>{completedSteps[step.title] ? "Done" : step.duration}</span>
+            </div>
+            <p className="mt-1 flex items-center gap-2 text-sm font-medium">
+              {completedSteps[step.title] ? <CheckCircle2 className="size-4 text-primary" suppressHydrationWarning /> : null}
+              {step.title}
+            </p>
+          </button>
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
+function SlideFrame({ eyebrow, title, children }: { eyebrow: string; title: string; children: ReactNode }) {
+  return (
+    <section className="deck-slide min-h-[32rem] rounded-md border border-border bg-background/55 p-5 shadow-2xl shadow-black/20 sm:p-7">
+      <div className="mb-6 border-b border-border/70 pb-4">
+        <p className="text-sm font-semibold uppercase text-primary">{eyebrow}</p>
+        <h2 className="mt-2 max-w-4xl text-3xl font-semibold leading-tight text-foreground sm:text-4xl">{title}</h2>
+      </div>
+      <div className="deck-slide-body">{children}</div>
+    </section>
+  );
+}
+
+function BriefSlide({ activeStep, knownFacts }: { activeStep: FacilitatorStep; knownFacts: string[] }) {
+  return (
+    <div className="space-y-5">
+      <div className="rounded-md border border-primary/30 bg-primary/10 p-5">
+        <div className="mb-3 flex items-center gap-2 text-sm font-medium text-primary">
+          <Sparkles className="size-4" suppressHydrationWarning />
+          TabletopForge Facilitator
+        </div>
+        <ReadingText text={activeStep.facilitatorScript} className="text-xl leading-8 text-foreground" speed={32} />
+      </div>
+      <div className="rounded-md border border-border/70 bg-background/55 p-5">
+        <div className="mb-2 text-sm font-medium text-muted-foreground">Current Situation</div>
+        <ReadingText text={activeStep.scenarioBrief ?? knownFacts[0] ?? activeStep.pressureNote} className="text-lg leading-8 text-foreground" speed={18} />
+      </div>
+      <div className="rounded-md border border-accent/35 bg-accent/10 p-4">
+        <div className="text-sm font-medium text-accent">Facilitator cue</div>
+        <ReadingText text={activeStep.pressureNote} className="mt-1 text-sm leading-6 text-muted-foreground" speed={30} />
+      </div>
+    </div>
+  );
+}
+
+function DecisionSlide({
+  activeDecision,
+  activeDecisionIndex,
+  total,
+  isDecided,
+  facilitatorHint,
+  onToggle,
+  onPrevious,
+  onNext,
+  onAsk,
+  onStuck,
+}: {
+  activeDecision: string;
+  activeDecisionIndex: number;
+  total: number;
+  isDecided: boolean;
+  facilitatorHint: string;
+  onToggle: (checked: boolean) => void;
+  onPrevious: () => void;
+  onNext: () => void;
+  onAsk: () => void;
+  onStuck: () => void;
+}) {
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-sm text-muted-foreground">
+          Decision {Math.min(activeDecisionIndex + 1, total)} of {total}
+        </p>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={onPrevious} disabled={activeDecisionIndex === 0}>
+            <ChevronLeft className="size-4" suppressHydrationWarning />
+            Previous
+          </Button>
+          <Button variant="outline" size="sm" onClick={onNext} disabled={activeDecisionIndex >= total - 1}>
+            Next decision
+            <ChevronRight className="size-4" suppressHydrationWarning />
+          </Button>
+        </div>
+      </div>
+      <div className="flex gap-4 rounded-md border border-primary/25 bg-primary/10 p-5">
+        <Checkbox checked={isDecided} onCheckedChange={(value) => onToggle(value === true)} className="mt-2" />
+        <div className="space-y-3">
+          <ReadingText text={activeDecision} className="text-2xl leading-9 text-foreground" speed={34} />
+          <Badge variant={isDecided ? "secondary" : "outline"}>{isDecided ? "Decided" : "Needs an answer"}</Badge>
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Button variant="outline" onClick={onAsk}>
+          <Bot className="size-4" suppressHydrationWarning />
+          Ask AI To Help
+        </Button>
+        <Button variant="outline" onClick={onStuck}>
+          <Lightbulb className="size-4" suppressHydrationWarning />
+          Team Is Stuck
+        </Button>
+      </div>
+      {facilitatorHint ? (
+        <ReadingText text={facilitatorHint} className="rounded-md bg-muted p-4 text-sm leading-6 text-muted-foreground" speed={26} />
+      ) : null}
+    </div>
+  );
+}
+
+function CaptureSlide({
+  isComplete,
+  exportNotice,
+  onComplete,
+  onCopy,
+  onDownload,
+}: {
+  isComplete: boolean;
+  exportNotice: string;
+  onComplete: (checked: boolean) => void;
+  onCopy: () => void;
+  onDownload: () => void;
+}) {
+  return (
+    <div className="space-y-5">
+      <div className="flex gap-4 rounded-md border border-primary/25 bg-primary/10 p-5">
+        <Checkbox checked={isComplete} onCheckedChange={(value) => onComplete(value === true)} className="mt-1" />
+        <div>
+          <p className="text-lg font-semibold">Mark this module complete</p>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">
+            Only capture what matters: decisions, unanswered questions, and follow-up work.
+          </p>
+        </div>
+      </div>
+      <div className="rounded-md border border-border bg-background/55 p-5">
+        <p className="text-sm font-medium">Notes stay open on the side.</p>
+        <p className="mt-2 text-sm leading-6 text-muted-foreground">
+          Use them throughout the exercise for improvements, decisions, unclear answers, and follow-up ideas.
+        </p>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Button variant="outline" onClick={onCopy}>
+          <Clipboard className="size-4" suppressHydrationWarning />
+          Copy Summary
+        </Button>
+        <Button variant="outline" onClick={onDownload}>
+          <Download className="size-4" suppressHydrationWarning />
+          Download Report
+        </Button>
+      </div>
+      {exportNotice ? <p className="text-sm text-primary">{exportNotice}</p> : null}
+    </div>
+  );
+}
+
+function InjectTray({
+  activeRevealedInjects,
+  revealedInjects,
+}: {
+  activeRevealedInjects: RevealedInject[];
+  revealedInjects: RevealedInject[];
+}) {
+  const latestInject = activeRevealedInjects.at(-1) ?? revealedInjects.at(-1);
+
+  return (
+    <Card className="bg-background/45 xl:sticky xl:top-[28rem]">
+      <CardHeader className="p-4">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Dices className="size-4 text-accent" suppressHydrationWarning />
+          Scenario Updates
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="p-4 pt-0">
+        {latestInject ? (
+          <div className="rounded-md border border-accent/35 bg-accent/10 p-3">
+            <Badge variant="secondary" className="mb-2">{latestInject.stepTitle}</Badge>
+            <p className="text-sm leading-6 text-foreground">{latestInject.text}</p>
+          </div>
+        ) : (
+          <p className="text-sm leading-6 text-muted-foreground">
+            Updates will appear here after the dice roll interrupts the discussion.
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function buildSlideTitle(stageId: FocusStageId) {
+  const titles: Record<FocusStageId, string> = {
+    brief: "Set the scene",
+    updates: "What changed?",
+    facts: "Sort facts from unknowns",
+    decision: "Make one decision",
+    question: "Discuss one question",
+    capture: "Lock in the lesson",
+  };
+
+  return titles[stageId];
 }
 
 function FocusStepper({

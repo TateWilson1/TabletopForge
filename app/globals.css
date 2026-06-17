@@ -74,6 +74,21 @@ body {
   animation: list-rise 0.28s ease-out both;
 }
 
+.deck-stage {
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
+}
+
+.deck-slide {
+  animation: slide-focus 0.28s ease-out both;
+  background:
+    linear-gradient(135deg, rgba(40, 199, 144, 0.08), transparent 42%),
+    hsl(var(--background) / 0.62);
+}
+
+.deck-slide-body {
+  animation: content-rise 0.24s ease-out 0.04s both;
+}
+
 @keyframes dice-cast {
   from {
     transform: rotate(-8deg) translateY(0) scale(0.98);
@@ -110,10 +125,36 @@ body {
   }
 }
 
+@keyframes slide-focus {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.995);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes content-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .dice-roll-face,
   .dice-roll-landed,
-  .session-list-item {
+  .session-list-item,
+  .deck-slide,
+  .deck-slide-body {
     animation: none;
   }
 

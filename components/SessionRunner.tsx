@@ -65,16 +65,16 @@ export function SessionRunner({ exerciseId }: { exerciseId: string | null }) {
   }
 
   return (
-    <main className="mx-auto max-w-[1560px] px-4 py-6 sm:px-6 lg:px-8">
-      <div className="mb-5 flex flex-col gap-4 border-b border-border/70 pb-5 xl:flex-row xl:items-start xl:justify-between">
-        <div>
-          <div className="mb-3 flex flex-wrap gap-2">
-            <Badge variant="secondary">TabletopForge facilitated</Badge>
+    <main className="mx-auto max-w-[1680px] px-3 py-4 sm:px-5 lg:px-7">
+      <div className="mb-4 flex flex-col gap-4 border-b border-border/70 pb-4 xl:flex-row xl:items-center xl:justify-between">
+        <div className="min-w-0">
+          <div className="mb-2 flex flex-wrap gap-2">
+            <Badge variant="secondary">Interactive tabletop deck</Badge>
             <Badge variant="outline">{exercise.overview.duration}</Badge>
             <Badge variant="outline">{exercise.overview.maturityLevel}</Badge>
           </div>
-          <h1 className="text-3xl font-semibold tracking-normal text-foreground">{exercise.overview.organization} Live Session</h1>
-          <p className="mt-2 text-muted-foreground">{exercise.overview.scenario}</p>
+          <h1 className="truncate text-2xl font-semibold tracking-normal text-foreground sm:text-3xl">{exercise.overview.organization}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">{exercise.overview.scenario}</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button asChild variant="outline">
