@@ -119,6 +119,7 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
   const [assistantAnswer, setAssistantAnswer] = useState("");
   const [assistantNotice, setAssistantNotice] = useState("");
   const [isAssistantThinking, setIsAssistantThinking] = useState(false);
+  const [isAssistantOpen, setIsAssistantOpen] = useState(false);
   const diceIntervalRef = useRef<number | null>(null);
   const diceTimeoutRef = useRef<number | null>(null);
 
@@ -315,6 +316,7 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
 
     setAssistantQuestion(question);
     setAssistantNotice("");
+    setIsAssistantOpen(true);
     setIsAssistantThinking(true);
 
     try {
@@ -399,40 +401,44 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
         onDismiss={() => setDiceRoll(null)}
       />
 
-      <div className="grid gap-4 xl:grid-cols-[0.74fr_1.26fr]">
-        <Card className="bg-background/45">
-          <CardHeader>
-            <div className="flex items-center justify-between gap-3">
-              <CardTitle className="text-lg">Session Flow</CardTitle>
-              <Badge variant="outline">App-led</Badge>
-            </div>
-            <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted">
-              <div className="h-full bg-primary transition-all" style={{ width: `${progress}%` }} />
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {steps.map((step, index) => (
-              <button
-                key={step.title}
-                className={`w-full rounded-md border p-3 text-left transition ${
-                  index === activeIndex
-                    ? "border-primary bg-primary/10 text-foreground"
-                    : "border-border bg-background/40 text-muted-foreground hover:bg-muted"
-                }`}
-                onClick={() => setActiveIndex(index)}
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-sm font-medium">{step.label}</span>
-                  <span className="text-xs">{completedSteps[step.title] ? "Complete" : step.duration}</span>
-                </div>
-                <p className="mt-1 flex items-center gap-2 text-sm">
-                  {completedSteps[step.title] ? <CheckCircle2 className="size-4 text-primary" suppressHydrationWarning /> : null}
-                  {step.title}
-                </p>
-              </button>
-            ))}
-          </CardContent>
-        </Card>
+      <div className="grid gap-4 xl:grid-cols-[0.7fr_1.3fr]">
+        <div className="space-y-4">
+          <Card className="bg-background/45">
+            <CardHeader>
+              <div className="flex items-center justify-between gap-3">
+                <CardTitle className="text-lg">Session Flow</CardTitle>
+                <Badge variant="outline">App-led</Badge>
+              </div>
+              <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted">
+                <div className="h-full bg-primary transition-all" style={{ width: `${progress}%` }} />
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {steps.map((step, index) => (
+                <button
+                  key={step.title}
+                  className={`w-full rounded-md border p-3 text-left transition ${
+                    index === activeIndex
+                      ? "border-primary bg-primary/10 text-foreground"
+                      : "border-border bg-background/40 text-muted-foreground hover:bg-muted"
+                  }`}
+                  onClick={() => setActiveIndex(index)}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-sm font-medium">{step.label}</span>
+                    <span className="text-xs">{completedSteps[step.title] ? "Complete" : step.duration}</span>
+                  </div>
+                  <p className="mt-1 flex items-center gap-2 text-sm">
+                    {completedSteps[step.title] ? <CheckCircle2 className="size-4 text-primary" suppressHydrationWarning /> : null}
+                    {step.title}
+                  </p>
+                </button>
+              ))}
+            </CardContent>
+          </Card>
+
+          <SessionNotesPanel sessionNotes={sessionNotes} onChange={setSessionNotes} />
+        </div>
 
         <Card className="bg-card/90">
           <CardHeader>
@@ -485,9 +491,11 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
               answer={assistantAnswer}
               notice={assistantNotice}
               isThinking={isAssistantThinking}
+              isOpen={isAssistantOpen}
               onQuestionChange={setAssistantQuestion}
               onAsk={() => askAssistant()}
               onQuickAsk={askAssistant}
+              onToggle={() => setIsAssistantOpen((current) => !current)}
             />
 
             {activeFocus.id === "brief" ? (
@@ -607,25 +615,11 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
                   </div>
                 </div>
                 {exportNotice ? <p className="text-sm text-primary">{exportNotice}</p> : null}
-                <div className="grid gap-4 lg:grid-cols-2">
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium">Discussion notes</label>
-                    <Textarea
-                      value={sessionNotes}
-                      onChange={(event) => setSessionNotes(event.target.value)}
-                      placeholder="Important decisions, unclear answers, and communication gaps."
-                      className="min-h-[150px]"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium">Action items</label>
-                    <Textarea
-                      value={actionItems}
-                      onChange={(event) => setActionItems(event.target.value)}
-                      placeholder="Action item | Owner | Due date | Priority"
-                      className="min-h-[150px]"
-                    />
-                  </div>
+                <div className="rounded-md border border-border bg-background/45 p-4">
+                  <p className="text-sm font-medium">Notes stay open in the left panel.</p>
+                  <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                    Use the notes area throughout the exercise for improvements, decisions, unclear answers, and follow-up ideas.
+                  </p>
                 </div>
               </section>
             ) : null}
@@ -701,6 +695,27 @@ function FocusStepper({
   );
 }
 
+function SessionNotesPanel({ sessionNotes, onChange }: { sessionNotes: string; onChange: (value: string) => void }) {
+  return (
+    <Card className="bg-background/45">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-lg">
+          <Clipboard className="size-5 text-primary" suppressHydrationWarning />
+          Notes
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <Textarea
+          value={sessionNotes}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder="Capture improvements, decisions, unclear answers, and follow-up ideas."
+          className="min-h-[220px]"
+        />
+      </CardContent>
+    </Card>
+  );
+}
+
 function ScenarioUpdates({
   activeStepTitle,
   activeRevealedInjects,
@@ -771,17 +786,21 @@ function AssistantPanel({
   answer,
   notice,
   isThinking,
+  isOpen,
   onQuestionChange,
   onAsk,
   onQuickAsk,
+  onToggle,
 }: {
   question: string;
   answer: string;
   notice: string;
   isThinking: boolean;
+  isOpen: boolean;
   onQuestionChange: (value: string) => void;
   onAsk: () => void;
   onQuickAsk: (question: string) => void;
+  onToggle: () => void;
 }) {
   const quickQuestions = [
     "Who should we contact first?",
@@ -792,41 +811,48 @@ function AssistantPanel({
 
   return (
     <section className="rounded-md border border-primary/25 bg-background/55 p-4">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <h3 className="flex items-center gap-2 font-semibold">
             <Bot className="size-4 text-primary" suppressHydrationWarning />
             Ask TabletopForge
           </h3>
-          <p className="mt-1 text-sm leading-6 text-muted-foreground">
-            Ask for help at any point. It will use the scenario and uploaded IRP findings when available.
-          </p>
+          <p className="mt-1 text-sm leading-6 text-muted-foreground">Available any time for IRP and decision help.</p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          {quickQuestions.map((item) => (
-            <Button key={item} type="button" variant="outline" size="sm" onClick={() => onQuickAsk(item)} disabled={isThinking}>
-              <MessageSquare className="size-3.5" suppressHydrationWarning />
-              {item}
-            </Button>
-          ))}
-        </div>
-      </div>
-      <div className="mt-4 grid gap-3 md:grid-cols-[1fr_auto]">
-        <Textarea
-          value={question}
-          onChange={(event) => onQuestionChange(event.target.value)}
-          placeholder="Ask what to do next, who owns a decision, or where the IRP supports the answer."
-          className="min-h-[84px]"
-        />
-        <Button className="md:self-end" onClick={onAsk} disabled={isThinking || question.trim().length === 0}>
-          <Send className="size-4" suppressHydrationWarning />
-          {isThinking ? "Thinking..." : "Ask"}
+        <Button variant="outline" onClick={onToggle}>
+          <MessageSquare className="size-4" suppressHydrationWarning />
+          {isOpen ? "Hide Help" : "Ask For Help"}
         </Button>
       </div>
-      {notice ? <p className="mt-3 text-xs text-muted-foreground">{notice}</p> : null}
-      {answer ? (
-        <div className="mt-3 rounded-md border border-primary/20 bg-primary/10 p-4">
-          <ReadingText text={answer} className="text-sm leading-6 text-foreground" speed={18} />
+
+      {isOpen ? (
+        <div className="mt-4 space-y-3">
+          <div className="flex flex-wrap gap-2">
+            {quickQuestions.map((item) => (
+              <Button key={item} type="button" variant="outline" size="sm" onClick={() => onQuickAsk(item)} disabled={isThinking}>
+                <MessageSquare className="size-3.5" suppressHydrationWarning />
+                {item}
+              </Button>
+            ))}
+          </div>
+          <div className="grid gap-3 md:grid-cols-[1fr_auto]">
+            <Textarea
+              value={question}
+              onChange={(event) => onQuestionChange(event.target.value)}
+              placeholder="Ask what to do next, who owns a decision, or where the IRP supports the answer."
+              className="min-h-[84px]"
+            />
+            <Button className="md:self-end" onClick={onAsk} disabled={isThinking || question.trim().length === 0}>
+              <Send className="size-4" suppressHydrationWarning />
+              {isThinking ? "Thinking..." : "Ask"}
+            </Button>
+          </div>
+          {notice ? <p className="text-xs text-muted-foreground">{notice}</p> : null}
+          {answer ? (
+            <div className="rounded-md border border-primary/20 bg-primary/10 p-4">
+              <ReadingText text={answer} className="text-sm leading-6 text-foreground" speed={18} />
+            </div>
+          ) : null}
         </div>
       ) : null}
     </section>

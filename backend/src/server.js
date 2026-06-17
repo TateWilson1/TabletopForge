@@ -188,6 +188,165 @@ app.get("/api/entitlements", async (request, response) => {
   }
 });
 
+app.get("/api/admin/overview", async (request, response) => {
+  try {
+    await authenticateAdminRequest(request);
+    const [
+      userStats,
+      tabletopStats,
+      usageStats,
+      aiStats,
+      recentUsers,
+      recentTabletops,
+      recentBillingEvents,
+      recentAiRuns,
+    ] = await Promise.all([
+      dbQuery(`SELECT COUNT(*)::int AS "totalUsers" FROM "users"`),
+      dbQuery(`SELECT COUNT(*)::int AS "totalTabletops" FROM "tabletops" WHERE "deletedAt" IS NULL`),
+      dbQuery(
+        `SELECT
+           COUNT(*)::int AS "totalGenerations",
+           COUNT(*) FILTER (WHERE "createdAt" >= date_trunc('month', NOW()))::int AS "generationsThisMonth"
+         FROM "generation_usages"`,
+      ),
+      dbQuery(
+        `SELECT
+           COUNT(*)::int AS "totalAiRuns",
+           COUNT(*) FILTER (WHERE "status" = 'failed')::int AS "failedAiRuns",
+           COALESCE(SUM("inputTokens"), 0)::int AS "inputTokens",
+           COALESCE(SUM("outputTokens"), 0)::int AS "outputTokens"
+         FROM "ai_runs"`,
+      ),
+      dbQuery(
+        `SELECT "id", "email", "freeGenerationsRemaining", "generationCredits", "billingPlan", "subscriptionStatus", "createdAt", "updatedAt"
+         FROM "users"
+         ORDER BY "createdAt" DESC
+         LIMIT 8`,
+      ),
+      dbQuery(
+        `SELECT t."id", t."title", t."industry", t."scenarioType", t."maturityLevel", t."generationSource", t."createdAt", u."email"
+         FROM "tabletops" t
+         LEFT JOIN "users" u ON u."id" = t."userId"
+         WHERE t."deletedAt" IS NULL
+         ORDER BY t."createdAt" DESC
+         LIMIT 8`,
+      ),
+      dbQuery(
+        `SELECT "id", "eventType", "createdAt"
+         FROM "billing_events"
+         ORDER BY "createdAt" DESC
+         LIMIT 8`,
+      ),
+      dbQuery(
+        `SELECT "id", "model", "promptType", "status", "inputTokens", "outputTokens", "errorMessage", "createdAt"
+         FROM "ai_runs"
+         ORDER BY "createdAt" DESC
+         LIMIT 8`,
+      ),
+    ]);
+
+    response.json({
+      stats: {
+        ...userStats.rows[0],
+        ...tabletopStats.rows[0],
+        ...usageStats.rows[0],
+        ...aiStats.rows[0],
+        stripeConfigured: Boolean(stripe),
+        aiFeatureEnabled: isAiFeatureEnabled(),
+        databaseBootstrap: databaseBootstrapStatus,
+      },
+      recentUsers: recentUsers.rows,
+      recentTabletops: recentTabletops.rows,
+      recentBillingEvents: recentBillingEvents.rows,
+      recentAiRuns: recentAiRuns.rows,
+    });
+  } catch (error) {
+    sendAuthError(response, error);
+  }
+});
+
+app.get("/api/admin/users", async (request, response) => {
+  try {
+    await authenticateAdminRequest(request);
+    const result = await dbQuery(
+      `SELECT
+         u."id", u."email", u."freeGenerationsRemaining", u."generationCredits",
+         u."billingPlan", u."subscriptionStatus", u."createdAt", u."updatedAt",
+         COUNT(DISTINCT t."id")::int AS "tabletopCount",
+         COUNT(DISTINCT gu."id")::int AS "generationCount"
+       FROM "users" u
+       LEFT JOIN "tabletops" t ON t."userId" = u."id" AND t."deletedAt" IS NULL
+       LEFT JOIN "generation_usages" gu ON gu."userId" = u."id"
+       GROUP BY u."id"
+       ORDER BY u."createdAt" DESC
+       LIMIT 100`,
+    );
+
+    response.json({ users: result.rows });
+  } catch (error) {
+    sendAuthError(response, error);
+  }
+});
+
+app.post("/api/admin/grant-credit", async (request, response) => {
+  try {
+    await authenticateAdminRequest(request);
+    const email = normalizeEmail(request.body?.email);
+    const credits = Number.parseInt(request.body?.credits, 10);
+
+    if (!email) {
+      response.status(400).json({ error: "Enter a valid email address." });
+      return;
+    }
+
+    if (!Number.isFinite(credits) || credits < 1 || credits > 50) {
+      response.status(400).json({ error: "Credits must be between 1 and 50." });
+      return;
+    }
+
+    const user = await ensureUser(email);
+    await dbQuery(
+      `UPDATE "users"
+       SET "generationCredits" = "generationCredits" + $1, "updatedAt" = NOW()
+       WHERE "id" = $2`,
+      [credits, user.id],
+    );
+    await dbQuery(
+      `INSERT INTO "paid_credit_ledger" ("id", "userId", "delta", "reason")
+       VALUES ($1, $2, $3, 'admin_grant')`,
+      [crypto.randomUUID(), user.id, credits],
+    );
+
+    response.json({ ok: true, user: publicUser(await getUserById(user.id)) });
+  } catch (error) {
+    sendAuthError(response, error);
+  }
+});
+
+app.post("/api/admin/reset-free-generation", async (request, response) => {
+  try {
+    await authenticateAdminRequest(request);
+    const email = normalizeEmail(request.body?.email);
+
+    if (!email) {
+      response.status(400).json({ error: "Enter a valid email address." });
+      return;
+    }
+
+    const user = await ensureUser(email);
+    await dbQuery(
+      `UPDATE "users"
+       SET "freeGenerationsRemaining" = 1, "updatedAt" = NOW()
+       WHERE "id" = $1`,
+      [user.id],
+    );
+
+    response.json({ ok: true, user: publicUser(await getUserById(user.id)) });
+  } catch (error) {
+    sendAuthError(response, error);
+  }
+});
+
 app.get("/api/tabletops", async (request, response) => {
   try {
     const session = await authenticateRequest(request);
@@ -544,6 +703,32 @@ async function authenticateRequest(request) {
   }
 
   return { user: result.rows[0] };
+}
+
+async function authenticateAdminRequest(request) {
+  const session = await authenticateRequest(request);
+  const adminEmails = getAdminEmails();
+
+  if (adminEmails.length === 0) {
+    const error = new Error("Admin access is not configured.");
+    error.statusCode = 403;
+    throw error;
+  }
+
+  if (!adminEmails.includes(normalizeEmail(session.user.email))) {
+    const error = new Error("Admin access is required.");
+    error.statusCode = 403;
+    throw error;
+  }
+
+  return session;
+}
+
+function getAdminEmails() {
+  return (process.env.TABLETOPFORGE_ADMIN_EMAILS || "")
+    .split(",")
+    .map((email) => normalizeEmail(email))
+    .filter(Boolean);
 }
 
 async function consumeGenerationEntitlement(userId, { title, generationSource, exercise, metadata = {} }) {

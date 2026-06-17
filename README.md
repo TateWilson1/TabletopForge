@@ -22,6 +22,7 @@ The product focuses on practical tabletop packages that help organizations test 
 - PostgreSQL-backed generation records tied to user accounts
 - Stripe-ready backend for pay-per-generation and subscription checkout
 - Monthly subscription generation cap before AI billing is enabled
+- Unlinked admin operations console for allowlisted owner accounts
 - Draft terms, privacy, and refund/cancellation pages
 - Responsive dark GRC dashboard interface
 
@@ -62,6 +63,10 @@ The backend is responsible for:
 - `POST /api/billing/create-checkout-session`: start Stripe Checkout for pay-per-generation or subscription.
 - `POST /api/billing/stripe-webhook`: receive Stripe events and update credits/subscriptions.
 - `POST /api/ai/generate-inject`: generate live injects with server-side OpenAI access and user-based authorization.
+- `GET /api/admin/overview`: allowlisted admin account overview for users, generations, billing events, and AI run status.
+- `GET /api/admin/users`: allowlisted admin user list.
+- `POST /api/admin/grant-credit`: allowlisted admin test-credit grant.
+- `POST /api/admin/reset-free-generation`: allowlisted admin free-generation reset.
 
 The current frontend still uses the deterministic local generator for the tabletop package, then sends the generated package to the backend for entitlement enforcement and PostgreSQL storage. The backend route is the place to move full AI tabletop generation when OpenAI credits and final prompts are ready.
 
@@ -84,6 +89,7 @@ Next setup steps:
 
 - Add a long random `TABLETOPFORGE_AUTH_SECRET` in Azure App Service settings.
 - Keep `TABLETOPFORGE_AUTH_DELIVERY_MODE="screen"` only for testing; replace it with real email/OAuth before public paid launch.
+- Add your owner email to `TABLETOPFORGE_ADMIN_EMAILS` before using the unlinked operations console.
 - Add OpenAI credits before enabling real AI generation paths.
 - Keep `TABLETOPFORGE_AI_FEATURE_ENABLED="false"` until you are ready for OpenAI spend.
 - Replace the temporary access-code testing path with user-session-only authorization for production.
@@ -108,6 +114,22 @@ Most users should not run the project with `npm`. Publish the app as a hosted Sa
 The browser can still keep local saved sessions for convenience, but the SaaS product direction is PostgreSQL-backed user ownership and billing-aware generation limits.
 
 See `docs/DISTRIBUTION.md` for the GitHub Pages and desktop release path, including an example GitHub Actions workflow.
+
+## Admin Operations Console
+
+The admin console is intentionally unlinked from the public navigation and is available at:
+
+```txt
+/ops-7f3c9a
+```
+
+It is not secured by obscurity alone. Backend admin endpoints require a signed-in session whose email is listed in the server-side Azure App Service setting:
+
+```txt
+TABLETOPFORGE_ADMIN_EMAILS="you@example.com,backup@example.com"
+```
+
+Use it to review users, recent tabletops, billing events, AI run status, and to grant/reset test generation access.
 
 ## Build And Lint
 

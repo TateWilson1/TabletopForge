@@ -51,6 +51,49 @@ export interface AccountTabletop {
   updatedAt: string;
 }
 
+export interface AdminUserRow extends AccountUser {
+  updatedAt: string;
+  tabletopCount: number;
+  generationCount: number;
+}
+
+export interface AdminOverview {
+  stats: {
+    totalUsers: number;
+    totalTabletops: number;
+    totalGenerations: number;
+    generationsThisMonth: number;
+    totalAiRuns: number;
+    failedAiRuns: number;
+    inputTokens: number;
+    outputTokens: number;
+    stripeConfigured: boolean;
+    aiFeatureEnabled: boolean;
+    databaseBootstrap: {
+      attempted: boolean;
+      ok: boolean;
+      error: string;
+    };
+  };
+  recentUsers: Array<AccountUser & { updatedAt: string }>;
+  recentTabletops: Array<AccountTabletop & { email: string | null }>;
+  recentBillingEvents: Array<{
+    id: string;
+    eventType: string;
+    createdAt: string;
+  }>;
+  recentAiRuns: Array<{
+    id: string;
+    model: string;
+    promptType: string;
+    status: string;
+    inputTokens: number | null;
+    outputTokens: number | null;
+    errorMessage: string | null;
+    createdAt: string;
+  }>;
+}
+
 export function normalizeAccountState(account: Partial<AccountState> | null | undefined): AccountState | null {
   if (!account?.user) {
     return null;
@@ -172,6 +215,31 @@ export async function createCheckoutSession(purchaseType: "tabletop" | "subscrip
     method: "POST",
     auth: true,
     body: JSON.stringify({ purchaseType }),
+  });
+}
+
+export async function fetchAdminOverview() {
+  return apiFetch<AdminOverview>("/api/admin/overview", { method: "GET", auth: true });
+}
+
+export async function fetchAdminUsers() {
+  const result = await apiFetch<{ users: AdminUserRow[] }>("/api/admin/users", { method: "GET", auth: true });
+  return result.users ?? [];
+}
+
+export async function grantAdminCredits(email: string, credits: number) {
+  return apiFetch<{ ok: boolean; user: AccountUser }>("/api/admin/grant-credit", {
+    method: "POST",
+    auth: true,
+    body: JSON.stringify({ email, credits }),
+  });
+}
+
+export async function resetAdminFreeGeneration(email: string) {
+  return apiFetch<{ ok: boolean; user: AccountUser }>("/api/admin/reset-free-generation", {
+    method: "POST",
+    auth: true,
+    body: JSON.stringify({ email }),
   });
 }
 

@@ -11,6 +11,10 @@ POST /api/auth/verify-code
 POST /api/auth/logout
 GET  /api/me
 GET  /api/entitlements
+GET  /api/admin/overview
+GET  /api/admin/users
+POST /api/admin/grant-credit
+POST /api/admin/reset-free-generation
 POST /api/tabletops/generate
 POST /api/tabletops/consume-generation
 POST /api/billing/create-checkout-session
@@ -19,6 +23,8 @@ POST /api/ai/generate-inject
 ```
 
 Account endpoints require `DATABASE_URL`. The generation endpoint stores a user-owned tabletop in PostgreSQL and consumes one free generation, one purchased generation credit, or allows generation for an active subscription. `POST /api/tabletops/consume-generation` remains as a compatibility route while the product moves to `/api/tabletops/generate`.
+
+Admin endpoints require `DATABASE_URL`, a valid signed-in session, and a user email listed in `TABLETOPFORGE_ADMIN_EMAILS`.
 
 `POST /api/ai/generate-inject` accepts either a signed-in account session:
 
@@ -50,6 +56,7 @@ Create `backend/.env` locally or add these as Azure App Service application sett
 DATABASE_URL="postgresql://tabletopadmin:YOUR_PASSWORD@tabletopforgedatabase.postgres.database.azure.com:5432/tabletopforge?sslmode=require"
 TABLETOPFORGE_AUTH_SECRET="use-a-long-random-secret"
 TABLETOPFORGE_AUTH_DELIVERY_MODE="screen"
+TABLETOPFORGE_ADMIN_EMAILS="you@example.com"
 TABLETOPFORGE_AUTO_MIGRATE="true"
 TABLETOPFORGE_SUBSCRIPTION_MONTHLY_LIMIT="10"
 OPENAI_API_KEY="sk-proj-YOUR_OPENAI_KEY"
@@ -71,6 +78,7 @@ Notes:
 - `DATABASE_URL` is required for accounts, free-generation limits, and billing state.
 - `TABLETOPFORGE_AUTH_SECRET` should be a long random value and should stay server-only.
 - `TABLETOPFORGE_AUTH_DELIVERY_MODE="screen"` shows login codes in the browser for setup/testing. Before a public paid launch, switch this to a real email or auth provider flow.
+- `TABLETOPFORGE_ADMIN_EMAILS` is a comma-separated allowlist for admin console access. Keep it server-side in Azure App Service settings.
 - `TABLETOPFORGE_AUTO_MIGRATE` lets the backend create the SaaS account/billing support tables on startup. Keep Prisma migrations as the source of truth; this is a deployment safety net.
 - `TABLETOPFORGE_SUBSCRIPTION_MONTHLY_LIMIT` caps subscription generations per calendar month.
 - `OPENAI_API_KEY` must stay server-only.
@@ -175,6 +183,7 @@ npm start
 DATABASE_URL
 TABLETOPFORGE_AUTH_SECRET
 TABLETOPFORGE_AUTH_DELIVERY_MODE
+TABLETOPFORGE_ADMIN_EMAILS
 TABLETOPFORGE_AUTO_MIGRATE
 TABLETOPFORGE_SUBSCRIPTION_MONTHLY_LIMIT
 OPENAI_API_KEY
@@ -240,6 +249,7 @@ The Azure App Service application settings still need:
 DATABASE_URL
 TABLETOPFORGE_AUTH_SECRET
 TABLETOPFORGE_AUTH_DELIVERY_MODE
+TABLETOPFORGE_ADMIN_EMAILS
 TABLETOPFORGE_AUTO_MIGRATE
 TABLETOPFORGE_SUBSCRIPTION_MONTHLY_LIMIT
 OPENAI_API_KEY
