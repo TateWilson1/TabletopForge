@@ -127,9 +127,9 @@ const industryProfiles: Record<ExerciseOptions["industry"], ContextProfile> = {
     expectedDecisions: ["Who can make urgent decisions when normal approvers are unavailable."],
   },
   "MSP / IT Provider": {
-    scenarioContext: "MSP context: include client impact, tenant separation, service desk load, remote management tools, SLAs, and vendor communication.",
-    executiveFocus: "Client trust, SLA impact, cross-client exposure, and tool integrity should drive leadership decisions.",
-    participants: ["Service Desk Manager", "Client Success/Account Lead", "Remote Monitoring Tool Owner"],
+    scenarioContext: "MSP context: the organization is the provider serving client environments. Include client impact, tenant separation, service desk load, remote management tools, SLAs, upstream software vendors, and client communication.",
+    executiveFocus: "Client trust, SLA impact, cross-client exposure, shared tool integrity, and account ownership should drive leadership decisions.",
+    participants: ["Service Desk Manager", "Client Success/Account Lead", "Remote Monitoring Tool Owner", "Client Account Owner"],
     objectives: ["Validate how the provider protects clients while containing potential spread across shared tools."],
     discussionQuestions: [
       "Which clients, tenants, or shared management tools could be affected first?",
@@ -214,8 +214,12 @@ export function generateExercise(options: ExerciseOptions): GeneratedExercise {
   const participants = uniqueStrings([...baseParticipants, ...industryProfile.participants, ...sizeProfile.participants]);
   const questionLimit = getQuestionLimit(options);
 
-  if (options.industry === "MSP / IT Provider" || options.scenarioType === "Vendor / Third-Party Breach") {
+  if (options.scenarioType === "Vendor / Third-Party Breach") {
     participants.push("Vendor/MSP Contact");
+  }
+
+  if (options.industry === "MSP / IT Provider") {
+    participants.push("Affected Client Representative", "Upstream Software Vendor Contact");
   }
 
   const discussionQuestions = buildQuestionSet(

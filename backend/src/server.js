@@ -682,7 +682,7 @@ app.post("/api/ai/generate-inject", async (request, response) => {
         {
           role: "system",
           content:
-            "You are TabletopForge, a cybersecurity tabletop exercise facilitator. Generate one realistic scenario inject that evolves the discussion. Do not provide exploit steps, malware instructions, credential theft guidance, evasion guidance, or requests for secrets.",
+            "You are TabletopForge, a cybersecurity tabletop exercise facilitator. Generate one short, realistic scenario inject that evolves the discussion like a presentation slide reveal. Keep it digestible for live participants. Do not provide exploit steps, malware instructions, credential theft guidance, evasion guidance, or requests for secrets.",
         },
         {
           role: "user",
@@ -699,9 +699,11 @@ app.post("/api/ai/generate-inject", async (request, response) => {
       },
     });
 
+    const inject = normalizeInjectForReveal(parseInject(aiResponse.output_text), request.body?.exercise?.industry);
+
     response.json({
       model,
-      inject: parseInject(aiResponse.output_text),
+      inject,
       usage: {
         inputTokens: aiResponse.usage?.input_tokens ?? null,
         outputTokens: aiResponse.usage?.output_tokens ?? null,
@@ -792,7 +794,10 @@ const injectSchema = {
   required: ["injectTitle", "injectText", "pressureLevel", "followUpQuestion", "expectedDecision"],
   properties: {
     injectTitle: { type: "string", description: "A short title for the scenario development." },
-    injectText: { type: "string", description: "One new realistic event to reveal to the tabletop participants." },
+    injectText: {
+      type: "string",
+      description: "One short realistic event to reveal to tabletop participants. Use 2 to 3 sentences maximum.",
+    },
     pressureLevel: {
       type: "string",
       enum: ["low", "medium", "high", "critical"],
@@ -1871,6 +1876,7 @@ function buildTabletopGenerationPrompt(options) {
       "For Advanced maturity, push hard on IRP gaps, evidence preservation, authority, legal/compliance decisions, communications approval, business continuity, and coordination pressure.",
       "For 1-25 organizations, emphasize thin staffing, backups, outside vendors, and decision coverage.",
       "For 1000+ organizations, emphasize enterprise command, regions, business units, vendors, legal, communications, and formal governance.",
+      "If industry is MSP / IT Provider, the organization is the service provider for client companies. Do not invent a partner MSP or external MSP for them to call. Use affected clients, client account owners, upstream software vendors, RMM/PSA vendors, cyber insurer, legal, or cloud providers instead.",
       "Use optional scenario details as first-class facts when present.",
       "Return concise but complete content. Discussion and gap questions should be actionable, not academic.",
       "Do not provide malware, exploit, credential theft, evasion, persistence, or harmful operational instructions.",
@@ -1912,6 +1918,10 @@ function buildPromptPayload(body) {
       "For Intermediate maturity, mix practical business decisions with moderate technical context.",
       "For Advanced maturity, create sharper pressure around authority, evidence, legal/compliance, communications, and business continuity gaps.",
       "Reflect organization size: small teams have coverage and vendor-dependency problems, while enterprise teams have coordination and authority problems.",
+      "Keep injectText to 2 or 3 sentences, 75 words maximum, and one clear new development.",
+      "Do not include analysis, multiple branches, long evidence lists, or the full answer inside injectText.",
+      "Put the next discussion prompt in followUpQuestion and the decision in expectedDecision instead of stuffing them into injectText.",
+      "If industry is MSP / IT Provider, the organization is the provider serving client companies. Do not say they contact an external MSP, partner MSP, or their MSP. Realistic parties are affected clients, client account owners, upstream software vendors, RMM/PSA vendors, cloud providers, legal, insurer, and internal service desk/escalation leads.",
       "Do not repeat prior injects.",
       "Do not provide malware, exploit, credential theft, evasion, or persistence instructions.",
       "Do not ask users to reveal passwords, secrets, API keys, private keys, tokens, or live credentials.",
@@ -2018,6 +2028,46 @@ function parseInject(value) {
     followUpQuestion: parsed.followUpQuestion,
     expectedDecision: parsed.expectedDecision,
   };
+}
+
+function normalizeInjectForReveal(inject, industry) {
+  const isMsp = industry === "MSP / IT Provider";
+  const realisticText = isMsp ? fixMspInjectLanguage(inject.injectText) : inject.injectText;
+
+  return {
+    ...inject,
+    injectTitle: asLimitedString(inject.injectTitle, 80),
+    injectText: compactRevealText(realisticText, 420, 75),
+    followUpQuestion: compactRevealText(inject.followUpQuestion, 180, 28),
+    expectedDecision: compactRevealText(inject.expectedDecision, 180, 28),
+  };
+}
+
+function fixMspInjectLanguage(value) {
+  return String(value)
+    .replace(/\bexternal MSP partner\b/gi, "upstream software vendor")
+    .replace(/\bpartner MSP\b/gi, "upstream software vendor")
+    .replace(/\bexternal MSP\b/gi, "upstream software vendor")
+    .replace(/\btheir MSP\b/gi, "their escalation lead")
+    .replace(/\byour MSP\b/gi, "your escalation lead")
+    .replace(/\bMSP partner\b/gi, "upstream software vendor");
+}
+
+function compactRevealText(value, maxChars, maxWords) {
+  const normalized = String(value ?? "").replace(/\s+/g, " ").trim();
+  const sentences = normalized.match(/[^.!?]+[.!?]+|[^.!?]+$/g) ?? [normalized];
+  let compact = sentences.slice(0, 3).join(" ").trim();
+  const words = compact.split(/\s+/).filter(Boolean);
+
+  if (words.length > maxWords) {
+    compact = `${words.slice(0, maxWords).join(" ").replace(/[,.!?;:]+$/, "")}.`;
+  }
+
+  if (compact.length > maxChars) {
+    compact = `${compact.slice(0, maxChars - 1).trim().replace(/[,.!?;:]+$/, "")}.`;
+  }
+
+  return compact;
 }
 
 function parseAssist(value) {

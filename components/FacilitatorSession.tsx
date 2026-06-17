@@ -1163,9 +1163,9 @@ function InjectOverlay({
           <p className="text-lg font-medium text-foreground">Rolling the next development...</p>
         ) : (
           <div className="mx-auto max-w-2xl space-y-5">
-            <div className="rounded-md border border-primary/35 bg-primary/10 p-5 text-left">
+            <div className="max-h-[38vh] overflow-y-auto rounded-md border border-primary/35 bg-primary/10 p-5 text-left">
               <p className="text-sm font-semibold text-primary">New information</p>
-              <ReadingText text={diceRoll?.injectText ?? ""} className="mt-2 text-lg leading-8 text-foreground" speed={28} />
+              <ReadingText text={diceRoll?.injectText ?? ""} className="mt-2 text-base leading-7 text-foreground sm:text-lg sm:leading-8" speed={28} />
             </div>
             <Button size="lg" onClick={onDismiss}>
               Return To Discussion
@@ -1201,7 +1201,7 @@ async function resolveInject({
   onNotice: (notice: string) => void;
 }): Promise<Inject> {
   if (!useAi) {
-    return fallbackInject;
+    return normalizeSessionInject(fallbackInject, exercise.overview.industry);
   }
 
   try {
@@ -1216,16 +1216,54 @@ async function resolveInject({
     });
 
     onNotice("AI generated this twist.");
-    return {
+    return normalizeSessionInject({
       id: fallbackInject.id,
       text: aiInject.injectText,
       fact: aiInject.injectText,
       unknown: aiInject.followUpQuestion,
-    };
+    }, exercise.overview.industry);
   } catch {
     onNotice("AI is unavailable right now, so TabletopForge used a built-in twist.");
-    return fallbackInject;
+    return normalizeSessionInject(fallbackInject, exercise.overview.industry);
   }
+}
+
+function normalizeSessionInject(inject: Inject, industry: GeneratedExercise["overview"]["industry"]): Inject {
+  const text = compactInjectReveal(industry === "MSP / IT Provider" ? fixMspRevealLanguage(inject.text) : inject.text, 360, 58);
+
+  return {
+    ...inject,
+    text,
+    fact: compactInjectReveal(industry === "MSP / IT Provider" ? fixMspRevealLanguage(inject.fact) : inject.fact, 260, 40),
+    unknown: compactInjectReveal(industry === "MSP / IT Provider" ? fixMspRevealLanguage(inject.unknown) : inject.unknown, 180, 26),
+  };
+}
+
+function fixMspRevealLanguage(value: string) {
+  return value
+    .replace(/\bexternal MSP partner\b/gi, "upstream software vendor")
+    .replace(/\bpartner MSP\b/gi, "upstream software vendor")
+    .replace(/\bexternal MSP\b/gi, "upstream software vendor")
+    .replace(/\btheir MSP\b/gi, "their escalation lead")
+    .replace(/\byour MSP\b/gi, "your escalation lead")
+    .replace(/\bMSP partner\b/gi, "upstream software vendor");
+}
+
+function compactInjectReveal(value: string, maxChars: number, maxWords: number) {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  const sentences = normalized.match(/[^.!?]+[.!?]+|[^.!?]+$/g) ?? [normalized];
+  let compact = sentences.slice(0, 2).join(" ").trim();
+  const words = compact.split(/\s+/).filter(Boolean);
+
+  if (words.length > maxWords) {
+    compact = `${words.slice(0, maxWords).join(" ").replace(/[,.!?;:]+$/, "")}.`;
+  }
+
+  if (compact.length > maxChars) {
+    compact = `${compact.slice(0, maxChars - 1).trim().replace(/[,.!?;:]+$/, "")}.`;
+  }
+
+  return compact;
 }
 
 async function requestAiInject({

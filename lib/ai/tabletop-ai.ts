@@ -36,7 +36,7 @@ const generatedInjectSchema = {
     },
     injectText: {
       type: "string",
-      description: "One realistic new development to reveal to tabletop participants.",
+      description: "One short realistic development to reveal to tabletop participants. Use 2 to 3 sentences maximum.",
     },
     pressureLevel: {
       type: "string",
@@ -86,7 +86,7 @@ export async function generateScenarioInject(input: GenerateInjectInput): Promis
         {
           role: "system",
           content:
-            "You are TabletopForge, a cybersecurity tabletop exercise facilitator. Create realistic, bounded injects that evolve the exercise without asking for sensitive secrets, credentials, exploit steps, or harmful instructions.",
+            "You are TabletopForge, a cybersecurity tabletop exercise facilitator. Create short, realistic, bounded injects that evolve the exercise like a presentation slide reveal without asking for sensitive secrets, credentials, exploit steps, or harmful instructions.",
         },
         {
           role: "user",
@@ -140,6 +140,10 @@ function buildInjectPromptPayload(input: GenerateInjectInput) {
     task: "Generate one new scenario inject for the current tabletop step.",
     constraints: [
       "Keep it realistic for the selected industry, organization size, maturity, and scenario.",
+      "Keep injectText to 2 or 3 sentences, 75 words maximum, and one clear new development.",
+      "Do not include analysis, multiple branches, long evidence lists, or the full answer inside injectText.",
+      "Put the next discussion prompt in followUpQuestion and the decision in expectedDecision instead of stuffing them into injectText.",
+      "If industry is MSP / IT Provider, the organization is the provider serving client companies. Do not say they contact an external MSP, partner MSP, or their MSP. Realistic parties are affected clients, client account owners, upstream software vendors, RMM/PSA vendors, cloud providers, legal, insurer, and internal service desk/escalation leads.",
       "Do not repeat prior injects.",
       "Do not provide malware, exploit, credential theft, or evasion instructions.",
       "Do not ask users to reveal passwords, secrets, API keys, private keys, tokens, or live credentials.",
@@ -182,11 +186,38 @@ function parseGeneratedInject(value: string): GeneratedInject {
 
   return {
     injectTitle: parsed.injectTitle,
-    injectText: parsed.injectText,
+    injectText: compactRevealText(fixMspInjectLanguage(parsed.injectText), 420, 75),
     pressureLevel: parsed.pressureLevel,
-    followUpQuestion: parsed.followUpQuestion,
-    expectedDecision: parsed.expectedDecision,
+    followUpQuestion: compactRevealText(parsed.followUpQuestion, 180, 28),
+    expectedDecision: compactRevealText(parsed.expectedDecision, 180, 28),
   };
+}
+
+function fixMspInjectLanguage(value: string) {
+  return String(value)
+    .replace(/\bexternal MSP partner\b/gi, "upstream software vendor")
+    .replace(/\bpartner MSP\b/gi, "upstream software vendor")
+    .replace(/\bexternal MSP\b/gi, "upstream software vendor")
+    .replace(/\btheir MSP\b/gi, "their escalation lead")
+    .replace(/\byour MSP\b/gi, "your escalation lead")
+    .replace(/\bMSP partner\b/gi, "upstream software vendor");
+}
+
+function compactRevealText(value: string | undefined, maxChars: number, maxWords: number) {
+  const normalized = String(value ?? "").replace(/\s+/g, " ").trim();
+  const sentences = normalized.match(/[^.!?]+[.!?]+|[^.!?]+$/g) ?? [normalized];
+  let compact = sentences.slice(0, 3).join(" ").trim();
+  const words = compact.split(/\s+/).filter(Boolean);
+
+  if (words.length > maxWords) {
+    compact = `${words.slice(0, maxWords).join(" ").replace(/[,.!?;:]+$/, "")}.`;
+  }
+
+  if (compact.length > maxChars) {
+    compact = `${compact.slice(0, maxChars - 1).trim().replace(/[,.!?;:]+$/, "")}.`;
+  }
+
+  return compact;
 }
 
 function generatedInjectToJson(inject: GeneratedInject) {
