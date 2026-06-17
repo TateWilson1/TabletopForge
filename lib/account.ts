@@ -210,6 +210,33 @@ export async function generateTabletop(
   });
 }
 
+export async function generateAiTabletop(
+  options: ExerciseOptions,
+): Promise<AccountState & { tabletopId: string; exercise: GeneratedExercise; usage?: { inputTokens: number | null; outputTokens: number | null } }> {
+  return apiFetch("/api/tabletops/generate-ai", {
+    method: "POST",
+    auth: true,
+    body: JSON.stringify({
+      options: {
+        organizationName: options.organizationName,
+        industry: options.industry,
+        organizationSize: options.organizationSize,
+        scenarioType: options.scenarioType,
+        maturityLevel: options.maturityLevel,
+        exerciseDuration: options.exerciseDuration,
+        includeExecutiveQuestions: options.includeExecutiveQuestions,
+        includeTechnicalQuestions: options.includeTechnicalQuestions,
+        includeComplianceQuestions: options.includeComplianceQuestions,
+        includeLessonsLearned: options.includeLessonsLearned,
+        hasHumanFacilitator: false,
+        customScenarioDetails: options.customScenarioDetails || "",
+        irpText: options.irpText || "",
+        irpFileName: options.irpFileName || "",
+      },
+    }),
+  });
+}
+
 export async function createCheckoutSession(purchaseType: "tabletop" | "subscription") {
   return apiFetch<{ url: string }>("/api/billing/create-checkout-session", {
     method: "POST",

@@ -9,12 +9,12 @@ const privacySections = [
   },
   {
     title: "IRP Contents",
-    text: "Uploaded or pasted IRP text is used in the browser to shape the exercise. Raw IRP contents should not be stored in PostgreSQL.",
+    text: "When AI generation is enabled, uploaded or pasted IRP text is sent to the backend and OpenAI to tailor the exercise. Raw IRP contents are not stored in PostgreSQL.",
     icon: ServerOff,
   },
   {
     title: "AI Mode",
-    text: "AI features are controlled by the backend, use server-side API keys only, and can be disabled until billing, limits, and user consent are ready.",
+    text: "AI features are controlled by the backend, use server-side API keys only, and are gated by user accounts, generation limits, and daily AI limits.",
     icon: Sparkles,
   },
   {

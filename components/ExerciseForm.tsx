@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { AccountPanel } from "@/components/AccountPanel";
-import { generateTabletop, isAccountApiConfigured, type AccountState } from "@/lib/account";
+import { generateAiTabletop, generateTabletop, isAccountApiConfigured, type AccountState } from "@/lib/account";
 import { generateExercise } from "@/lib/generator";
 import { saveExercise } from "@/lib/storage";
 import {
@@ -96,23 +96,32 @@ export function ExerciseForm() {
     setIsGenerating(true);
     setError("");
 
-    const generatedExercise = generateExercise({ ...options, hasHumanFacilitator: false });
-    let generated = generatedExercise;
+    let generated = generateExercise({ ...options, hasHumanFacilitator: false });
+    let generationNotice = "Exercise generated and saved in this browser.";
 
     if (accountApiConfigured) {
       try {
-        const result = await generateTabletop(options, generatedExercise);
-        generated = { ...generatedExercise, id: result.tabletopId };
+        const result = await generateAiTabletop({ ...options, hasHumanFacilitator: false });
+        generated = result.exercise;
         setAccount({ user: result.user, entitlements: result.entitlements });
+        generationNotice = "AI exercise generated and saved in this browser.";
       } catch (requestError) {
-        setIsGenerating(false);
-        setError(requestError instanceof Error ? requestError.message : "Could not start generation.");
-        return;
+        try {
+          const fallbackExercise = generateExercise({ ...options, hasHumanFacilitator: false });
+          const result = await generateTabletop(options, fallbackExercise);
+          generated = { ...fallbackExercise, id: result.tabletopId };
+          setAccount({ user: result.user, entitlements: result.entitlements });
+          generationNotice = "AI generation was unavailable, so TabletopForge used the built-in generator.";
+        } catch (fallbackError) {
+          setIsGenerating(false);
+          setError(fallbackError instanceof Error ? fallbackError.message : requestError instanceof Error ? requestError.message : "Could not start generation.");
+          return;
+        }
       }
     }
 
     saveExercise(generated);
-    setSavedNotice("Exercise generated and saved in this browser.");
+    setSavedNotice(generationNotice);
     router.push(`/session?id=${encodeURIComponent(generated.id)}`);
   }
 
@@ -214,7 +223,7 @@ export function ExerciseForm() {
               <div className="flex items-start gap-2">
                 <ShieldCheck className="mt-0.5 size-4 text-primary" suppressHydrationWarning />
                 <p className="text-sm leading-6 text-muted-foreground">
-                  Privacy: IRP text stays in this browser in the current version. It is not sent to an AI service or server.
+                  Privacy: when AI generation is enabled, IRP text is sent to the secure backend and OpenAI to tailor the exercise, but raw IRP contents are not stored in PostgreSQL.
                 </p>
               </div>
             </div>

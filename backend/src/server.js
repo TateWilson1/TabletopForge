@@ -415,6 +415,109 @@ app.post("/api/tabletops/generate", async (request, response) => {
   }
 });
 
+app.post("/api/tabletops/generate-ai", async (request, response) => {
+  try {
+    const session = await authenticateRequest(request);
+    const configError = validateAiConfig();
+    if (configError) {
+      response.status(503).json({ error: configError, code: "AI_UNAVAILABLE" });
+      return;
+    }
+
+    if (!consumeDailyRequest()) {
+      response.status(429).json({ error: "Daily AI request limit reached." });
+      return;
+    }
+
+    const options = sanitizeAiGenerationOptions(request.body?.options);
+    if (!options) {
+      response.status(400).json({ error: "Valid tabletop generation options are required." });
+      return;
+    }
+
+    await assertGenerationEntitlement(session.user.id);
+
+    const model = process.env.OPENAI_MODEL || DEFAULT_MODEL;
+    const generatedAt = new Date().toISOString();
+    const aiResponse = await openai.responses.create({
+      model,
+      input: [
+        {
+          role: "system",
+          content:
+            "You are TabletopForge, an expert cybersecurity tabletop exercise designer. Generate a complete, unique, realistic incident response tabletop exercise from the user's organization context, selected scenario, maturity level, duration, optional scenario details, participants, and IRP text. Make the exercise practical and facilitator-ready. Keep raw IRP text out of the final answer. Do not provide malware, exploit, credential theft, evasion, persistence, or harmful operational instructions.",
+        },
+        {
+          role: "user",
+          content: JSON.stringify(buildTabletopGenerationPrompt(options)),
+        },
+      ],
+      text: {
+        format: {
+          type: "json_schema",
+          name: "tabletop_exercise",
+          strict: true,
+          schema: tabletopExerciseSchema,
+        },
+      },
+    });
+
+    let exercise = parseAiGeneratedExercise(aiResponse.output_text, options, generatedAt);
+    const title = buildTabletopTitle(exercise, options);
+    const tabletop = await consumeGenerationEntitlement(session.user.id, {
+      title,
+      generationSource: "server_ai",
+      exercise,
+      metadata: {
+        industry: exercise.overview.industry,
+        scenarioType: exercise.overview.scenario,
+        maturityLevel: exercise.overview.maturityLevel,
+      },
+    });
+
+    exercise = {
+      ...exercise,
+      id: tabletop.id,
+      markdownReport: buildGeneratedExerciseMarkdown({ ...exercise, id: tabletop.id }),
+    };
+
+    await dbQuery(`UPDATE "tabletops" SET "exerciseJson" = $1, "updatedAt" = NOW() WHERE "id" = $2`, [exercise, tabletop.id]);
+    await recordAiRun({
+      tabletopId: tabletop.id,
+      userId: session.user.id,
+      model,
+      promptType: "tabletop_generation",
+      status: "completed",
+      inputTokens: aiResponse.usage?.input_tokens ?? null,
+      outputTokens: aiResponse.usage?.output_tokens ?? null,
+      resultJson: {
+        scenario: exercise.overview.scenario,
+        maturityLevel: exercise.overview.maturityLevel,
+        hasIrpAnalysis: Boolean(exercise.irpAnalysis),
+      },
+    });
+
+    const user = await getUserById(session.user.id);
+    response.json({
+      tabletopId: tabletop.id,
+      exercise,
+      usage: {
+        inputTokens: aiResponse.usage?.input_tokens ?? null,
+        outputTokens: aiResponse.usage?.output_tokens ?? null,
+      },
+      ...(await buildAccountPayload(user)),
+    });
+  } catch (error) {
+    if (error.statusCode === 402) {
+      response.status(402).json({ error: error.message, code: "PAYMENT_REQUIRED" });
+      return;
+    }
+
+    console.error("AI tabletop generation failed", error);
+    sendAuthError(response, error);
+  }
+});
+
 app.post("/api/tabletops/consume-generation", async (request, response) => {
   try {
     const session = await authenticateRequest(request);
@@ -658,6 +761,77 @@ const assistSchema = {
   },
 };
 
+const tabletopExerciseSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "purpose",
+    "scenarioSummary",
+    "objectives",
+    "suggestedParticipants",
+    "discussionQuestions",
+    "gapDiscoveryQuestions",
+    "expectedDecisions",
+    "facilitatorNotes",
+    "executiveSummary",
+    "irpAnalysis",
+    "lessonsLearnedTemplate",
+  ],
+  properties: {
+    purpose: { type: "string" },
+    scenarioSummary: { type: "string" },
+    objectives: { type: "array", items: { type: "string" } },
+    suggestedParticipants: { type: "array", items: { type: "string" } },
+    discussionQuestions: { type: "array", items: { type: "string" } },
+    gapDiscoveryQuestions: { type: "array", items: { type: "string" } },
+    expectedDecisions: { type: "array", items: { type: "string" } },
+    facilitatorNotes: { type: "array", items: { type: "string" } },
+    executiveSummary: { type: "string" },
+    irpAnalysis: {
+      type: "object",
+      additionalProperties: false,
+      required: ["sourceName", "wordCount", "overallSummary", "strengths", "findings"],
+      properties: {
+        sourceName: { type: "string" },
+        wordCount: { type: "number" },
+        overallSummary: { type: "string" },
+        strengths: { type: "array", items: { type: "string" } },
+        findings: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["id", "label", "status", "summary", "evidence", "tailoredQuestions", "improvement"],
+            properties: {
+              id: { type: "string" },
+              label: { type: "string" },
+              status: { type: "string", enum: ["found", "weak", "missing"] },
+              summary: { type: "string" },
+              evidence: { type: "array", items: { type: "string" } },
+              tailoredQuestions: { type: "array", items: { type: "string" } },
+              improvement: { type: "string" },
+            },
+          },
+        },
+      },
+    },
+    lessonsLearnedTemplate: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["prompt", "owner", "dueDate", "priority"],
+        properties: {
+          prompt: { type: "string" },
+          owner: { type: "string" },
+          dueDate: { type: "string" },
+          priority: { type: "string" },
+        },
+      },
+    },
+  },
+};
+
 async function authenticateAiRequest(request) {
   const bearerToken = getBearerToken(request);
   if (bearerToken) {
@@ -821,6 +995,18 @@ async function consumeGenerationEntitlement(userId, { title, generationSource, e
     throw error;
   } finally {
     client.release();
+  }
+}
+
+async function assertGenerationEntitlement(userId) {
+  const user = await getUserById(userId);
+  const subscriptionGenerationsUsedThisMonth = await getSubscriptionUsageThisMonth(userId);
+  const entitlements = buildEntitlements(user, subscriptionGenerationsUsedThisMonth);
+
+  if (!entitlements.canGenerate) {
+    throw Object.assign(new Error("You have used your free tabletop. Buy one tabletop or start a subscription to generate more."), {
+      statusCode: 402,
+    });
   }
 }
 
@@ -1527,6 +1713,84 @@ function validateAssistRequest(body) {
   return "";
 }
 
+function sanitizeAiGenerationOptions(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const organizationName = asLimitedString(value.organizationName, 120);
+  const industry = asLimitedString(value.industry, 80);
+  const organizationSize = asLimitedString(value.organizationSize, 40);
+  const scenarioType = asLimitedString(value.scenarioType, 120);
+  const maturityLevel = asLimitedString(value.maturityLevel, 40);
+  const exerciseDuration = asLimitedString(value.exerciseDuration, 40);
+
+  if (!organizationName || !industry || !organizationSize || !scenarioType || !maturityLevel || !exerciseDuration) {
+    return null;
+  }
+
+  return {
+    organizationName,
+    industry,
+    organizationSize,
+    scenarioType,
+    maturityLevel,
+    exerciseDuration,
+    includeExecutiveQuestions: value.includeExecutiveQuestions !== false,
+    includeTechnicalQuestions: value.includeTechnicalQuestions === true,
+    includeComplianceQuestions: value.includeComplianceQuestions !== false,
+    includeLessonsLearned: value.includeLessonsLearned !== false,
+    hasHumanFacilitator: false,
+    customScenarioDetails: asLimitedString(value.customScenarioDetails, 2500),
+    irpText: asLimitedString(value.irpText, 40_000),
+    irpFileName: asLimitedString(value.irpFileName, 200),
+  };
+}
+
+function buildTabletopGenerationPrompt(options) {
+  return {
+    task: "Generate a complete TabletopForge incident response tabletop exercise package.",
+    constraints: [
+      "Make this unique to the exact organization context, scenario type, industry, organization size, maturity level, duration, optional details, and IRP text.",
+      "Do not use generic hard-coded questions when a more specific question can be generated from the provided context.",
+      "If IRP text is provided, identify strengths and gaps from the IRP and tailor questions, expected decisions, and scenario pressure toward those gaps.",
+      "Do not store, quote, or reproduce long raw IRP passages. Summarize plan coverage and use short evidence keywords only.",
+      "For Basic maturity, write for non-technical participants with plain language, clear ownership, and handholding.",
+      "For Intermediate maturity, mix business impact, ownership, escalation, containment, and moderate technical detail.",
+      "For Advanced maturity, push hard on IRP gaps, evidence preservation, authority, legal/compliance decisions, communications approval, business continuity, and coordination pressure.",
+      "For 1-25 organizations, emphasize thin staffing, backups, outside vendors, and decision coverage.",
+      "For 1000+ organizations, emphasize enterprise command, regions, business units, vendors, legal, communications, and formal governance.",
+      "Use optional scenario details as first-class facts when present.",
+      "Return concise but complete content. Discussion and gap questions should be actionable, not academic.",
+      "Do not provide malware, exploit, credential theft, evasion, persistence, or harmful operational instructions.",
+      "Return only the required JSON object.",
+    ],
+    requestedOutputShape: {
+      questionTargets: {
+        discussionQuestions: "12 to 18 context-specific questions",
+        gapDiscoveryQuestions: "8 to 14 IRP and process gap questions",
+        expectedDecisions: "8 to 14 concrete decisions",
+        objectives: "5 to 8 measurable objectives",
+      },
+    },
+    options: {
+      organizationName: options.organizationName,
+      industry: options.industry,
+      organizationSize: options.organizationSize,
+      scenarioType: options.scenarioType,
+      maturityLevel: options.maturityLevel,
+      exerciseDuration: options.exerciseDuration,
+      includeExecutiveQuestions: options.includeExecutiveQuestions,
+      includeTechnicalQuestions: options.includeTechnicalQuestions,
+      includeComplianceQuestions: options.includeComplianceQuestions,
+      includeLessonsLearned: options.includeLessonsLearned,
+      customScenarioDetails: options.customScenarioDetails,
+      irpFileName: options.irpFileName,
+      irpText: options.irpText,
+    },
+  };
+}
+
 function buildPromptPayload(body) {
   return {
     task: "Generate one new scenario inject for the current tabletop step.",
@@ -1664,6 +1928,221 @@ function parseAssist(value) {
     recommendedNextStep: parsed.recommendedNextStep,
     missingInfo: parsed.missingInfo.slice(0, 6),
   };
+}
+
+function parseAiGeneratedExercise(value, options, generatedAt) {
+  const parsed = JSON.parse(value);
+  const exercise = {
+    id: crypto.randomUUID(),
+    generatedAt,
+    overview: {
+      organization: options.organizationName,
+      industry: options.industry,
+      organizationSize: options.organizationSize,
+      scenario: options.scenarioType,
+      duration: options.exerciseDuration,
+      maturityLevel: options.maturityLevel,
+      hasHumanFacilitator: false,
+      purpose: asLimitedString(parsed.purpose, 1200),
+    },
+    scenarioSummary: asLimitedString(parsed.scenarioSummary, 5000),
+    customScenarioDetails: options.customScenarioDetails || undefined,
+    objectives: asStringArray(parsed.objectives, 10),
+    suggestedParticipants: asStringArray(parsed.suggestedParticipants, 18),
+    discussionQuestions: asStringArray(parsed.discussionQuestions, 24),
+    gapDiscoveryQuestions: asStringArray(parsed.gapDiscoveryQuestions, 20),
+    expectedDecisions: asStringArray(parsed.expectedDecisions, 20),
+    facilitatorNotes: asStringArray(parsed.facilitatorNotes, 14),
+    irpAnalysis: normalizeAiIrpAnalysis(parsed.irpAnalysis, options, generatedAt),
+    lessonsLearnedTemplate: normalizeLessonsLearnedTemplate(parsed.lessonsLearnedTemplate, options.includeLessonsLearned),
+    executiveSummary: asLimitedString(parsed.executiveSummary, 3000),
+    markdownReport: "",
+  };
+
+  const requiredArrays = [
+    ["objectives", exercise.objectives],
+    ["suggestedParticipants", exercise.suggestedParticipants],
+    ["discussionQuestions", exercise.discussionQuestions],
+    ["gapDiscoveryQuestions", exercise.gapDiscoveryQuestions],
+    ["expectedDecisions", exercise.expectedDecisions],
+    ["facilitatorNotes", exercise.facilitatorNotes],
+  ];
+  const missing = requiredArrays.find(([, items]) => items.length === 0);
+  if (!exercise.overview.purpose || !exercise.scenarioSummary || !exercise.executiveSummary || missing) {
+    throw new Error(`AI tabletop response was incomplete${missing ? `: ${missing[0]}` : ""}.`);
+  }
+
+  return {
+    ...exercise,
+    markdownReport: buildGeneratedExerciseMarkdown(exercise),
+  };
+}
+
+function normalizeAiIrpAnalysis(value, options, generatedAt) {
+  const hasIrp = Boolean(options.irpText?.trim());
+  if (!value || typeof value !== "object") {
+    if (!hasIrp) {
+      return undefined;
+    }
+
+    return {
+      sourceName: options.irpFileName || "Provided IRP text",
+      analyzedAt: generatedAt,
+      wordCount: countWords(options.irpText),
+      overallSummary: "The AI generation did not return a structured IRP analysis.",
+      strengths: [],
+      findings: [],
+    };
+  }
+
+  const findings = Array.isArray(value.findings)
+    ? value.findings.slice(0, 12).map((finding, index) => ({
+        id: asLimitedString(finding?.id, 80) || `ai-finding-${index + 1}`,
+        label: asLimitedString(finding?.label, 160) || "IRP finding",
+        status: ["found", "weak", "missing"].includes(finding?.status) ? finding.status : "weak",
+        summary: asLimitedString(finding?.summary, 1000),
+        evidence: asStringArray(finding?.evidence, 5),
+        tailoredQuestions: asStringArray(finding?.tailoredQuestions, 5),
+        improvement: asLimitedString(finding?.improvement, 1000),
+      }))
+    : [];
+
+  if (!hasIrp && findings.length === 0 && !asLimitedString(value.overallSummary, 1000)) {
+    return undefined;
+  }
+
+  return {
+    sourceName: asLimitedString(value.sourceName, 200) || options.irpFileName || (hasIrp ? "Provided IRP text" : "No IRP uploaded"),
+    analyzedAt: generatedAt,
+    wordCount: Number.isFinite(value.wordCount) ? Number(value.wordCount) : countWords(options.irpText),
+    overallSummary:
+      asLimitedString(value.overallSummary, 1500) ||
+      (hasIrp ? "The AI reviewed the provided IRP text for exercise-relevant gaps." : "No IRP was uploaded."),
+    strengths: asStringArray(value.strengths, 8),
+    findings,
+  };
+}
+
+function normalizeLessonsLearnedTemplate(value, includeLessonsLearned) {
+  if (!includeLessonsLearned) {
+    return undefined;
+  }
+
+  const items = Array.isArray(value) ? value : [];
+  const normalized = items.slice(0, 10).map((item) => ({
+    prompt: asLimitedString(item?.prompt, 300),
+    owner: asLimitedString(item?.owner, 120),
+    dueDate: asLimitedString(item?.dueDate, 80),
+    priority: asLimitedString(item?.priority, 80),
+  })).filter((item) => item.prompt);
+
+  return normalized.length > 0
+    ? normalized
+    : [
+        { prompt: "What worked well?", owner: "", dueDate: "", priority: "" },
+        { prompt: "What was unclear?", owner: "", dueDate: "", priority: "" },
+        { prompt: "What needs to improve before the next incident?", owner: "", dueDate: "", priority: "" },
+        { prompt: "Action item", owner: "", dueDate: "", priority: "" },
+      ];
+}
+
+function buildGeneratedExerciseMarkdown(exercise) {
+  const lines = [
+    `# ${exercise.overview.organization} Tabletop Exercise`,
+    "",
+    "## Exercise Overview",
+    `- Organization: ${exercise.overview.organization}`,
+    `- Industry: ${exercise.overview.industry}`,
+    `- Organization size: ${exercise.overview.organizationSize}`,
+    `- Scenario: ${exercise.overview.scenario}`,
+    `- Duration: ${exercise.overview.duration}`,
+    `- Maturity level: ${exercise.overview.maturityLevel}`,
+    "- Session mode: TabletopForge facilitated",
+    `- Purpose: ${exercise.overview.purpose}`,
+    "",
+    "## Scenario Summary",
+    exercise.scenarioSummary,
+    "",
+    ...(exercise.customScenarioDetails ? ["## Custom Scenario Details", exercise.customScenarioDetails, ""] : []),
+    markdownList("Exercise Objectives", exercise.objectives),
+    markdownList("Suggested Participants", exercise.suggestedParticipants),
+    exercise.irpAnalysis ? buildIrpMarkdown(exercise.irpAnalysis) : "",
+    markdownList("Discussion Questions", exercise.discussionQuestions),
+    markdownList("IRP Gap Discovery Questions", exercise.gapDiscoveryQuestions),
+    markdownList("Expected Decisions", exercise.expectedDecisions),
+    markdownList("Facilitator Notes", exercise.facilitatorNotes),
+    "## Executive Summary",
+    exercise.executiveSummary,
+    "",
+  ];
+
+  if (exercise.lessonsLearnedTemplate) {
+    lines.push("## Lessons Learned Template");
+    lines.push("| Prompt | Owner | Due date | Priority |");
+    lines.push("| --- | --- | --- | --- |");
+    exercise.lessonsLearnedTemplate.forEach((item) => {
+      lines.push(`| ${item.prompt} | ${item.owner || ""} | ${item.dueDate || ""} | ${item.priority || ""} |`);
+    });
+    lines.push("");
+  }
+
+  return lines.filter((line) => line !== "").join("\n");
+}
+
+function markdownList(title, items) {
+  return [`## ${title}`, ...items.map((item) => `- ${item}`), ""].join("\n");
+}
+
+function buildIrpMarkdown(analysis) {
+  return [
+    "## IRP Gap Analysis",
+    analysis.overallSummary,
+    "",
+    ...(analysis.strengths.length ? markdownList("IRP Strengths", analysis.strengths).split("\n") : []),
+    ...(analysis.findings.length
+      ? [
+          "## IRP Findings",
+          ...analysis.findings.map((finding) => `- ${finding.label} (${finding.status}): ${finding.summary} ${finding.improvement}`),
+          "",
+        ]
+      : []),
+  ].join("\n");
+}
+
+function countWords(value) {
+  return typeof value === "string" ? (value.trim().match(/\S+/g) ?? []).length : 0;
+}
+
+async function recordAiRun({
+  tabletopId,
+  userId,
+  model,
+  promptType,
+  status,
+  inputTokens,
+  outputTokens,
+  resultJson,
+  errorMessage = null,
+}) {
+  await dbQuery(
+    `INSERT INTO "ai_runs" (
+       "id", "tabletopId", "userId", "model", "promptType", "status",
+       "inputTokens", "outputTokens", "resultJson", "errorMessage", "completedAt"
+     )
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())`,
+    [
+      crypto.randomUUID(),
+      tabletopId,
+      userId,
+      model,
+      promptType,
+      status,
+      inputTokens,
+      outputTokens,
+      resultJson,
+      errorMessage,
+    ],
+  );
 }
 
 function asShortString(value) {

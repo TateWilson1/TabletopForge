@@ -15,6 +15,7 @@ GET  /api/admin/overview
 GET  /api/admin/users
 POST /api/admin/grant-credit
 POST /api/admin/reset-free-generation
+POST /api/tabletops/generate-ai
 POST /api/tabletops/generate
 POST /api/tabletops/consume-generation
 POST /api/billing/create-checkout-session
@@ -22,7 +23,7 @@ POST /api/billing/stripe-webhook
 POST /api/ai/generate-inject
 ```
 
-Account endpoints require `DATABASE_URL`. The generation endpoint stores a user-owned tabletop in PostgreSQL and consumes one free generation, one purchased generation credit, or allows generation for an active subscription. `POST /api/tabletops/consume-generation` remains as a compatibility route while the product moves to `/api/tabletops/generate`.
+Account endpoints require `DATABASE_URL`. `POST /api/tabletops/generate-ai` generates a full AI-authored tabletop package, stores it in PostgreSQL, and consumes one free generation, one purchased generation credit, or allows generation for an active subscription. `POST /api/tabletops/generate` remains as a deterministic fallback/storage route.
 
 Admin endpoints require `DATABASE_URL`, a valid signed-in session, and a user email listed in `TABLETOPFORGE_ADMIN_EMAILS`.
 
@@ -61,7 +62,7 @@ TABLETOPFORGE_AUTO_MIGRATE="true"
 TABLETOPFORGE_SUBSCRIPTION_MONTHLY_LIMIT="10"
 OPENAI_API_KEY="sk-proj-YOUR_OPENAI_KEY"
 OPENAI_MODEL="gpt-5-mini"
-TABLETOPFORGE_AI_FEATURE_ENABLED="false"
+TABLETOPFORGE_AI_FEATURE_ENABLED="true"
 TABLETOPFORGE_AI_ACCESS_CODE="change-this-before-public-use"
 TABLETOPFORGE_AI_DAILY_LIMIT="50"
 TABLETOPFORGE_ALLOWED_ORIGINS="https://tatewilson1.github.io,http://localhost:3000,http://localhost:3001"
@@ -83,7 +84,7 @@ Notes:
 - `TABLETOPFORGE_SUBSCRIPTION_MONTHLY_LIMIT` caps subscription generations per calendar month.
 - `OPENAI_API_KEY` must stay server-only.
 - `OPENAI_MODEL` defaults to `gpt-5-mini` if omitted.
-- `TABLETOPFORGE_AI_FEATURE_ENABLED` should stay `false` until OpenAI billing, prompts, rate limits, and abuse controls are ready.
+- `TABLETOPFORGE_AI_FEATURE_ENABLED` must be `true` for full AI tabletop generation, AI injects, and AI assistance. Keep it `false` only when you intentionally want local fallback behavior.
 - `TABLETOPFORGE_AI_DAILY_LIMIT` is enforced in memory per running server instance.
 - `TABLETOPFORGE_ALLOWED_ORIGINS` should include your GitHub Pages origin, not the full path. Use `https://tatewilson1.github.io`, not `https://tatewilson1.github.io/TabletopForge`.
 - Stripe variables are optional until you want real paid checkout. Without them, the checkout endpoint returns a clear configuration error.
@@ -223,7 +224,7 @@ For GitHub Pages, `.github/workflows/deploy-pages.yml` sets this during the stat
 
 AI injects are optional in the session UI. If the OpenAI account has no credits, the backend is unavailable, or the access code is wrong, the frontend falls back to the built-in scenario twists so the exercise can keep running.
 
-For the paid-product flow, the frontend signs users in through the backend and calls `/api/tabletops/generate` to store the generated package after entitlement checks. The frontend sends the generated tabletop output and metadata, but it does not send or store raw uploaded IRP contents.
+For the paid-product flow, the frontend signs users in through the backend and calls `/api/tabletops/generate-ai` first. The backend checks entitlement before calling OpenAI, sends the input context and IRP text to OpenAI for tailoring, stores only the generated tabletop output, and does not store raw uploaded IRP contents. If AI is unavailable during testing, the frontend falls back to `/api/tabletops/generate`.
 
 The access code is now mainly a testing fallback. The production direction is account sessions plus Stripe-backed entitlements.
 

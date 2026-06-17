@@ -51,14 +51,15 @@ The long-term architecture is:
 6. Stripe Checkout grants either one paid generation credit or subscription status through webhook events.
 7. Subscriptions are capped by `TABLETOPFORGE_SUBSCRIPTION_MONTHLY_LIMIT` before public AI usage is enabled.
 8. `TABLETOPFORGE_AI_ACCESS_CODE` is only a temporary development/testing guard. Production authorization should be user-session based.
-9. `TABLETOPFORGE_AI_FEATURE_ENABLED` should stay `false` until OpenAI billing, rate limits, and prompts are ready.
-10. Uploaded IRP contents should not be stored in PostgreSQL. Store generated tabletop output and Azure Blob metadata only.
+9. `TABLETOPFORGE_AI_FEATURE_ENABLED` enables backend AI tabletop generation, AI injects, and AI assistance.
+10. Uploaded IRP contents may be sent to the backend and OpenAI for AI generation, but raw IRP contents should not be stored in PostgreSQL. Store generated tabletop output and Azure Blob metadata only.
 
 ## Backend API Direction
 
 The backend is responsible for:
 
 - `GET /api/entitlements`: return user usage and generation eligibility.
+- `POST /api/tabletops/generate-ai`: generate a full AI-authored tabletop package after entitlement checks.
 - `POST /api/tabletops/generate`: create/store a user-owned tabletop generation after entitlement checks.
 - `POST /api/billing/create-checkout-session`: start Stripe Checkout for pay-per-generation or subscription.
 - `POST /api/billing/stripe-webhook`: receive Stripe events and update credits/subscriptions.
@@ -68,7 +69,7 @@ The backend is responsible for:
 - `POST /api/admin/grant-credit`: allowlisted admin test-credit grant.
 - `POST /api/admin/reset-free-generation`: allowlisted admin free-generation reset.
 
-The current frontend still uses the deterministic local generator for the tabletop package, then sends the generated package to the backend for entitlement enforcement and PostgreSQL storage. The backend route is the place to move full AI tabletop generation when OpenAI credits and final prompts are ready.
+The frontend now prefers backend AI tabletop generation when AI is enabled. If AI is unavailable during testing, it falls back to the deterministic local generator and still sends the generated package to the backend for entitlement enforcement and PostgreSQL storage.
 
 ## Implementation Roadmap
 
@@ -91,7 +92,7 @@ Next setup steps:
 - Keep `TABLETOPFORGE_AUTH_DELIVERY_MODE="screen"` only for testing; replace it with real email/OAuth before public paid launch.
 - Add your owner email to `TABLETOPFORGE_ADMIN_EMAILS` before using the unlinked operations console.
 - Add OpenAI credits before enabling real AI generation paths.
-- Keep `TABLETOPFORGE_AI_FEATURE_ENABLED="false"` until you are ready for OpenAI spend.
+- Set `TABLETOPFORGE_AI_FEATURE_ENABLED="true"` when you are ready for OpenAI spend.
 - Replace the temporary access-code testing path with user-session-only authorization for production.
 
 ## Run Locally
