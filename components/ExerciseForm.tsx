@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { FileText, ShieldCheck, Wand2, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -15,6 +15,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { AccountPanel } from "@/components/AccountPanel";
 import { generateAiTabletop, generateTabletop, isAccountApiConfigured, type AccountState } from "@/lib/account";
 import { generateExercise } from "@/lib/generator";
+import { extractIrpTextFromFile } from "@/lib/irp-file";
 import { saveExercise } from "@/lib/storage";
 import {
   exerciseDurations,
@@ -49,10 +50,37 @@ export function ExerciseForm() {
   const [savedNotice, setSavedNotice] = useState("");
   const [irpNotice, setIrpNotice] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
+  const [generationProgress, setGenerationProgress] = useState(0);
+  const [generationStep, setGenerationStep] = useState("Preparing exercise context...");
   const [account, setAccount] = useState<AccountState | null>(null);
 
   const canGenerate = useMemo(() => options.organizationName.trim().length >= 2, [options.organizationName]);
   const accountApiConfigured = isAccountApiConfigured();
+
+  useEffect(() => {
+    if (!isGenerating) {
+      setGenerationProgress(0);
+      setGenerationStep("Preparing exercise context...");
+      return;
+    }
+
+    const steps = [
+      "Preparing exercise context...",
+      "Reading IRP and optional details...",
+      "Asking AI to build a unique scenario...",
+      "Tailoring questions to gaps and difficulty...",
+      "Saving the tabletop to your account...",
+      "Opening the live session...",
+    ];
+    let tick = 0;
+    const timerId = window.setInterval(() => {
+      tick += 1;
+      setGenerationProgress((current) => Math.min(92, current + (current < 50 ? 7 : 3)));
+      setGenerationStep(steps[Math.min(steps.length - 1, Math.floor(tick / 3))]);
+    }, 700);
+
+    return () => window.clearInterval(timerId);
+  }, [isGenerating]);
 
   function updateOption<K extends keyof ExerciseOptions>(key: K, value: ExerciseOptions[K]) {
     setOptions((current) => ({ ...current, [key]: value }));
@@ -65,15 +93,23 @@ export function ExerciseForm() {
       return;
     }
 
-    if (file.size > 750_000) {
-      setError("Upload an IRP text file smaller than 750 KB, or paste a shorter excerpt.");
+    if (file.size > 5_000_000) {
+      setError("Upload an IRP file smaller than 5 MB, or paste a shorter excerpt.");
       return;
     }
 
-    const text = await file.text();
-    updateOption("irpText", text);
-    updateOption("irpFileName", file.name);
-    setIrpNotice(`Loaded ${file.name}. The full IRP text stays in this browser and is not saved.`);
+    setError("");
+    setIrpNotice(`Reading ${file.name}...`);
+
+    try {
+      const text = await extractIrpTextFromFile(file);
+      updateOption("irpText", text);
+      updateOption("irpFileName", file.name);
+      setIrpNotice(`Loaded ${file.name}. Extracted ${Math.max(1, text.trim().split(/\s+/).filter(Boolean).length)} words.`);
+    } catch (uploadError) {
+      setIrpNotice("");
+      setError(uploadError instanceof Error ? uploadError.message : "Could not read this IRP file.");
+    }
   }
 
   function clearIrp() {
@@ -121,6 +157,7 @@ export function ExerciseForm() {
     }
 
     saveExercise(generated);
+    setGenerationProgress(100);
     setSavedNotice(generationNotice);
     router.push(`/session?id=${encodeURIComponent(generated.id)}`);
   }
@@ -208,7 +245,7 @@ export function ExerciseForm() {
               <div>
                 <Label>Incident response plan</Label>
                 <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                  Upload a plain-text IRP or paste text copied from a PDF or Word document to tailor questions around likely gaps.
+                  Upload a PDF, Word document, or text IRP to tailor questions around likely gaps.
                 </p>
               </div>
               {options.irpText ? (
@@ -230,11 +267,11 @@ export function ExerciseForm() {
 
             <div className="grid gap-3 sm:grid-cols-[0.72fr_1.28fr]">
               <div className="space-y-2">
-                <Label htmlFor="irpFile">Upload IRP text</Label>
+                <Label htmlFor="irpFile">Upload IRP</Label>
                 <Input
                   id="irpFile"
                   type="file"
-                  accept=".txt,.md,.rtf,.csv,text/plain,text/markdown"
+                  accept=".pdf,.docx,.txt,.md,.rtf,.csv,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown"
                   onChange={(event) => handleIrpUpload(event.target.files?.[0])}
                 />
               </div>
@@ -295,13 +332,31 @@ export function ExerciseForm() {
 
           {error ? <p className="text-sm text-destructive">{error}</p> : null}
           {savedNotice ? <p className="text-sm text-primary">{savedNotice}</p> : null}
+          {isGenerating ? <GenerationProgress progress={generationProgress} step={generationStep} /> : null}
 
           <Button className="w-full" size="lg" onClick={handleGenerate} disabled={isGenerating}>
             <Wand2 className="size-4" suppressHydrationWarning />
-            {isGenerating ? "Starting Session..." : "Generate And Start Session"}
+            {isGenerating ? "Generating With AI..." : "Generate And Start Session"}
           </Button>
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+function GenerationProgress({ progress, step }: { progress: number; step: string }) {
+  return (
+    <div className="rounded-md border border-primary/30 bg-primary/10 p-4">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm font-medium text-primary">{step}</p>
+        <span className="text-sm text-muted-foreground">{progress}%</span>
+      </div>
+      <div className="mt-3 h-2 overflow-hidden rounded-full bg-background">
+        <div className="h-full bg-primary transition-all duration-500" style={{ width: `${progress}%` }} />
+      </div>
+      <p className="mt-3 text-sm leading-6 text-muted-foreground">
+        AI generation can take a moment because it is reading the context, tailoring the IRP gaps, and building a full facilitator-ready session.
+      </p>
     </div>
   );
 }

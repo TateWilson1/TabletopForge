@@ -8,6 +8,8 @@ This is a separate Node/Express backend for Azure App Service. The frontend can 
 GET  /health
 POST /api/auth/request-code
 POST /api/auth/verify-code
+POST /api/auth/password-register
+POST /api/auth/password-login
 POST /api/auth/logout
 GET  /api/me
 GET  /api/entitlements
@@ -23,7 +25,7 @@ POST /api/billing/stripe-webhook
 POST /api/ai/generate-inject
 ```
 
-Account endpoints require `DATABASE_URL`. `POST /api/tabletops/generate-ai` generates a full AI-authored tabletop package, stores it in PostgreSQL, and consumes one free generation, one purchased generation credit, or allows generation for an active subscription. `POST /api/tabletops/generate` remains as a deterministic fallback/storage route.
+Account endpoints require `DATABASE_URL`. Password auth is the primary user-facing flow. The older login-code endpoints remain for setup/testing fallback. `POST /api/tabletops/generate-ai` generates a full AI-authored tabletop package, stores it in PostgreSQL, and consumes one free generation, one purchased generation credit, or allows generation for an active subscription. `POST /api/tabletops/generate` remains as a deterministic fallback/storage route.
 
 Admin endpoints require `DATABASE_URL`, a valid signed-in session, and a user email listed in `TABLETOPFORGE_ADMIN_EMAILS`.
 
@@ -78,7 +80,8 @@ Notes:
 
 - `DATABASE_URL` is required for accounts, free-generation limits, and billing state.
 - `TABLETOPFORGE_AUTH_SECRET` should be a long random value and should stay server-only.
-- `TABLETOPFORGE_AUTH_DELIVERY_MODE="screen"` shows login codes in the browser for setup/testing. Before a public paid launch, switch this to a real email or auth provider flow.
+- Password sign-in is now the primary visible account flow.
+- `TABLETOPFORGE_AUTH_DELIVERY_MODE="screen"` only affects the legacy setup/testing code flow. Before a public paid launch, keep the visible password flow or add a real email/OAuth provider.
 - `TABLETOPFORGE_ADMIN_EMAILS` is a comma-separated allowlist for admin console access. Keep it server-side in Azure App Service settings.
 - `TABLETOPFORGE_AUTO_MIGRATE` lets the backend create the SaaS account/billing support tables on startup. Keep Prisma migrations as the source of truth; this is a deployment safety net.
 - `TABLETOPFORGE_SUBSCRIPTION_MONTHLY_LIMIT` caps subscription generations per calendar month.

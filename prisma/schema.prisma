@@ -17,6 +17,9 @@ model User {
   billingPlan              String             @default("free")
   subscriptionStatus       String             @default("none")
   stripeCustomerId         String?            @unique
+  passwordHash             String?
+  passwordSalt             String?
+  passwordIterations       Int?
   tabletops                Tabletop[]
   authSessions             AuthSession[]
   loginCodes               LoginCode[]

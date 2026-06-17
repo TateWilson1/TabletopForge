@@ -160,6 +160,34 @@ export async function verifyLoginCode(email: string, code: string): Promise<Acco
   return { ...result, ...normalized };
 }
 
+export async function registerWithPassword(email: string, password: string): Promise<AccountState & { token: string; expiresAt: string }> {
+  const result = await apiFetch<AccountState & { token: string; expiresAt: string }>("/api/auth/password-register", {
+    method: "POST",
+    body: JSON.stringify({ email, password }),
+  });
+  storeSessionToken(result.token);
+  const normalized = normalizeAccountState(result);
+  if (!normalized) {
+    throw new Error("Account response was incomplete.");
+  }
+
+  return { ...result, ...normalized };
+}
+
+export async function loginWithPassword(email: string, password: string): Promise<AccountState & { token: string; expiresAt: string }> {
+  const result = await apiFetch<AccountState & { token: string; expiresAt: string }>("/api/auth/password-login", {
+    method: "POST",
+    body: JSON.stringify({ email, password }),
+  });
+  storeSessionToken(result.token);
+  const normalized = normalizeAccountState(result);
+  if (!normalized) {
+    throw new Error("Account response was incomplete.");
+  }
+
+  return { ...result, ...normalized };
+}
+
 export async function fetchAccount(): Promise<AccountState> {
   const result = await apiFetch<AccountState>("/api/me", { method: "GET", auth: true });
   const normalized = normalizeAccountState(result);

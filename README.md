@@ -19,6 +19,7 @@ The product focuses on practical tabletop packages that help organizations test 
 - Copyable and downloadable Markdown reports
 - Browser-based saved exercises with LocalStorage
 - User account flow for free-generation and paid-credit entitlement checks
+- Password-based sign-in and account creation
 - PostgreSQL-backed generation records tied to user accounts
 - Stripe-ready backend for pay-per-generation and subscription checkout
 - Monthly subscription generation cap before AI billing is enabled
@@ -78,6 +79,7 @@ Completed foundation:
 - Azure backend separated from GitHub Pages static hosting.
 - Server-side OpenAI key usage for AI injects.
 - Account/session endpoints.
+- Password-based account creation and sign-in.
 - One-free-generation entitlement model.
 - Paid-credit and subscription-ready data model.
 - Stripe checkout/webhook route skeleton.
@@ -89,7 +91,7 @@ Completed foundation:
 Next setup steps:
 
 - Add a long random `TABLETOPFORGE_AUTH_SECRET` in Azure App Service settings.
-- Keep `TABLETOPFORGE_AUTH_DELIVERY_MODE="screen"` only for testing; replace it with real email/OAuth before public paid launch.
+- Password sign-in is the primary visible account flow. Keep `TABLETOPFORGE_AUTH_DELIVERY_MODE="screen"` only for legacy setup-code testing.
 - Add your owner email to `TABLETOPFORGE_ADMIN_EMAILS` before using the unlinked operations console.
 - Add OpenAI credits before enabling real AI generation paths.
 - Set `TABLETOPFORGE_AI_FEATURE_ENABLED="true"` when you are ready for OpenAI spend.
@@ -113,6 +115,8 @@ Most users should not run the project with `npm`. Publish the app as a hosted Sa
 - Database: use Azure PostgreSQL with Prisma migrations and/or the backend bootstrap safety net.
 
 The browser can still keep local saved sessions for convenience, but the SaaS product direction is PostgreSQL-backed user ownership and billing-aware generation limits.
+
+IRP upload supports `.pdf`, `.docx`, and text-like files. PDF and Word files are converted to text in the browser before AI generation. Scanned image-only PDFs still need OCR text pasted manually.
 
 See `docs/DISTRIBUTION.md` for the GitHub Pages and desktop release path, including an example GitHub Actions workflow.
 

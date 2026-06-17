@@ -153,6 +153,73 @@ app.post("/api/auth/verify-code", async (request, response) => {
   }
 });
 
+app.post("/api/auth/password-register", async (request, response) => {
+  try {
+    requireDatabase();
+    const email = normalizeEmail(request.body?.email);
+    const password = typeof request.body?.password === "string" ? request.body.password : "";
+
+    if (!email || !isValidPassword(password)) {
+      response.status(400).json({ error: "Enter a valid email and a password with at least 10 characters." });
+      return;
+    }
+
+    const user = await ensureUser(email);
+    const existing = await getUserPasswordRecord(email);
+    if (existing?.passwordHash) {
+      response.status(409).json({ error: "This account already has a password. Sign in instead." });
+      return;
+    }
+
+    const passwordRecord = hashPassword(password);
+    await dbQuery(
+      `UPDATE "users"
+       SET "passwordHash" = $1, "passwordSalt" = $2, "passwordIterations" = $3, "updatedAt" = NOW()
+       WHERE "id" = $4`,
+      [passwordRecord.hash, passwordRecord.salt, passwordRecord.iterations, user.id],
+    );
+
+    const session = await createSession(user.id);
+    const signedInUser = await getUserById(user.id);
+    response.json({
+      token: session.token,
+      expiresAt: session.expiresAt.toISOString(),
+      ...(await buildAccountPayload(signedInUser)),
+    });
+  } catch (error) {
+    sendApiError(response, error, "Could not create account.");
+  }
+});
+
+app.post("/api/auth/password-login", async (request, response) => {
+  try {
+    requireDatabase();
+    const email = normalizeEmail(request.body?.email);
+    const password = typeof request.body?.password === "string" ? request.body.password : "";
+
+    if (!email || !password) {
+      response.status(400).json({ error: "Email and password are required." });
+      return;
+    }
+
+    const user = await getUserPasswordRecord(email);
+    if (!user?.passwordHash || !verifyPassword(password, user)) {
+      response.status(401).json({ error: "Invalid email or password." });
+      return;
+    }
+
+    const session = await createSession(user.id);
+    const signedInUser = await getUserById(user.id);
+    response.json({
+      token: session.token,
+      expiresAt: session.expiresAt.toISOString(),
+      ...(await buildAccountPayload(signedInUser)),
+    });
+  } catch (error) {
+    sendApiError(response, error, "Could not sign in.");
+  }
+});
+
 app.post("/api/auth/logout", async (request, response) => {
   try {
     const token = getBearerToken(request);
@@ -1054,6 +1121,19 @@ async function getUserById(userId) {
   return result.rows[0];
 }
 
+async function getUserPasswordRecord(email) {
+  const result = await dbQuery(
+    `SELECT
+       "id", "email", "passwordHash", "passwordSalt", "passwordIterations"
+     FROM "users"
+     WHERE "email" = $1
+     LIMIT 1`,
+    [email],
+  );
+
+  return result.rows[0] ?? null;
+}
+
 async function getUserUsageSummary(userId) {
   const result = await dbQuery(
     `SELECT "entitlementType", COUNT(*)::int AS "count"
@@ -1310,6 +1390,9 @@ async function ensureSaasSchema() {
       "billingPlan" TEXT NOT NULL DEFAULT 'free',
       "subscriptionStatus" TEXT NOT NULL DEFAULT 'none',
       "stripeCustomerId" TEXT,
+      "passwordHash" TEXT,
+      "passwordSalt" TEXT,
+      "passwordIterations" INTEGER,
       CONSTRAINT "users_pkey" PRIMARY KEY ("id")
     )`,
     `CREATE TABLE IF NOT EXISTS "tabletops" (
@@ -1401,6 +1484,9 @@ async function ensureSaasSchema() {
     `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "stripeCustomerId" TEXT`,
     `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "subscriptionStatus" TEXT NOT NULL DEFAULT 'none'`,
     `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP`,
+    `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "passwordHash" TEXT`,
+    `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "passwordSalt" TEXT`,
+    `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "passwordIterations" INTEGER`,
     `ALTER TABLE "tabletops" ADD COLUMN IF NOT EXISTS "generationSource" TEXT NOT NULL DEFAULT 'local'`,
     `ALTER TABLE "tabletops" ADD COLUMN IF NOT EXISTS "exerciseJson" JSONB`,
     `ALTER TABLE "tabletops" ADD COLUMN IF NOT EXISTS "scenarioType" TEXT`,
@@ -1577,6 +1663,31 @@ function getBearerToken(request) {
 function hashSecret(value) {
   const key = process.env.TABLETOPFORGE_AUTH_SECRET || process.env.OPENAI_API_KEY || process.env.TABLETOPFORGE_AI_ACCESS_CODE || "dev-only";
   return crypto.createHmac("sha256", key).update(value).digest("hex");
+}
+
+function isValidPassword(password) {
+  return typeof password === "string" && password.length >= 10 && password.length <= 256;
+}
+
+function hashPassword(password) {
+  const iterations = 210_000;
+  const salt = crypto.randomBytes(16).toString("hex");
+  const hash = crypto.pbkdf2Sync(password, salt, iterations, 32, "sha256").toString("hex");
+  return { hash, salt, iterations };
+}
+
+function verifyPassword(password, user) {
+  if (!user?.passwordHash || !user.passwordSalt || !user.passwordIterations) {
+    return false;
+  }
+
+  const candidate = crypto
+    .pbkdf2Sync(password, user.passwordSalt, Number(user.passwordIterations), 32, "sha256")
+    .toString("hex");
+  const expected = Buffer.from(user.passwordHash, "hex");
+  const actual = Buffer.from(candidate, "hex");
+
+  return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
 }
 
 function getAllowedOrigins() {

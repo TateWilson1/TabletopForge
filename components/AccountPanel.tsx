@@ -14,9 +14,9 @@ import {
   fetchAccountTabletops,
   getStoredSessionToken,
   isAccountApiConfigured,
-  requestLoginCode,
+  loginWithPassword,
+  registerWithPassword,
   signOut,
-  verifyLoginCode,
   type AccountTabletop,
   type AccountState,
 } from "@/lib/account";
@@ -30,8 +30,7 @@ export function AccountPanel({
 }) {
   const [account, setAccount] = useState<AccountState | null>(null);
   const [email, setEmail] = useState("");
-  const [code, setCode] = useState("");
-  const [screenCode, setScreenCode] = useState("");
+  const [password, setPassword] = useState("");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [isBusy, setIsBusy] = useState(false);
@@ -67,18 +66,18 @@ export function AccountPanel({
     }
   }
 
-  async function handleRequestCode() {
+  async function handlePasswordSignIn() {
     setIsBusy(true);
     setError("");
     setNotice("");
-    setScreenCode("");
     try {
-      const response = await requestLoginCode(email);
-      setNotice(response.message);
-      if (response.loginCode) {
-        setScreenCode(response.loginCode);
-        setCode(response.loginCode);
+      const nextAccount = await loginWithPassword(email, password);
+      setAccount(nextAccount);
+      onAccountChange?.(nextAccount);
+      if (!compact) {
+        setTabletops(await fetchAccountTabletops());
       }
+      setNotice("Signed in. Your account is ready.");
     } catch (requestError) {
       setError(getErrorMessage(requestError));
     } finally {
@@ -86,18 +85,18 @@ export function AccountPanel({
     }
   }
 
-  async function handleVerifyCode() {
+  async function handleCreateAccount() {
     setIsBusy(true);
     setError("");
+    setNotice("");
     try {
-      const nextAccount = await verifyLoginCode(email, code);
+      const nextAccount = await registerWithPassword(email, password);
       setAccount(nextAccount);
       onAccountChange?.(nextAccount);
       if (!compact) {
         setTabletops(await fetchAccountTabletops());
       }
-      setNotice("Signed in. Your account is ready.");
-      setScreenCode("");
+      setNotice("Account created. Your free tabletop is ready.");
     } catch (requestError) {
       setError(getErrorMessage(requestError));
     } finally {
@@ -233,30 +232,26 @@ export function AccountPanel({
               placeholder="you@example.com"
             />
           </div>
-          <Button className="self-end" onClick={handleRequestCode} disabled={isBusy || email.trim().length < 5}>
-            Send Code
-          </Button>
         </div>
-
-        {screenCode ? (
-          <div className="rounded-md border border-primary/30 bg-primary/10 p-3">
-            <p className="text-sm font-medium text-primary">Temporary setup code</p>
-            <p className="mt-1 font-mono text-lg text-foreground">{screenCode}</p>
-          </div>
-        ) : null}
 
         <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
           <div className="space-y-2">
-            <Label htmlFor={compact ? "compactCode" : "accountCode"}>Code</Label>
+            <Label htmlFor={compact ? "compactPassword" : "accountPassword"}>Password</Label>
             <Input
-              id={compact ? "compactCode" : "accountCode"}
-              value={code}
-              onChange={(event) => setCode(event.target.value)}
-              placeholder="6-digit code"
+              id={compact ? "compactPassword" : "accountPassword"}
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder="At least 10 characters"
             />
           </div>
-          <Button className="self-end" variant="secondary" onClick={handleVerifyCode} disabled={isBusy || code.trim().length < 6}>
-            Verify
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Button onClick={handlePasswordSignIn} disabled={isBusy || email.trim().length < 5 || password.length < 1}>
+            Sign In
+          </Button>
+          <Button variant="outline" onClick={handleCreateAccount} disabled={isBusy || email.trim().length < 5 || password.length < 10}>
+            Create Account
           </Button>
         </div>
 
