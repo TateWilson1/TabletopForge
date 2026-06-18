@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import { AuthGate } from "@/components/AuthGate";
 import { SessionFromQuery } from "@/components/SessionFromQuery";
 import { Card, CardContent } from "@/components/ui/card";
 
@@ -13,7 +14,9 @@ export default function SessionPage() {
         </main>
       }
     >
-      <SessionFromQuery />
+      <AuthGate>
+        <SessionFromQuery />
+      </AuthGate>
     </Suspense>
   );
 }

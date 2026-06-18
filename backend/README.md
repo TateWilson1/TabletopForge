@@ -25,7 +25,7 @@ POST /api/billing/stripe-webhook
 POST /api/ai/generate-inject
 ```
 
-Account endpoints require `DATABASE_URL`. Password auth is the primary user-facing flow. The older login-code endpoints remain for setup/testing fallback. `POST /api/tabletops/generate-ai` generates a full AI-authored tabletop package, stores it in PostgreSQL, and consumes one free generation, one purchased generation credit, or allows generation for an active subscription. `POST /api/tabletops/generate` remains as a deterministic fallback/storage route.
+Account endpoints require `DATABASE_URL`. User-facing account creation requires a verification code before a password can be set. In Azure/public hosting, codes should be delivered by email and should not be shown on screen. `POST /api/tabletops/generate-ai` generates a full AI-authored tabletop package, stores it in PostgreSQL, and consumes one free generation, one purchased generation credit, or allows generation for an active subscription. `POST /api/tabletops/generate` remains as a deterministic fallback/storage route.
 
 Admin endpoints require `DATABASE_URL`, a valid signed-in session, and a user email listed in `TABLETOPFORGE_ADMIN_EMAILS`.
 
@@ -58,7 +58,10 @@ Create `backend/.env` locally or add these as Azure App Service application sett
 ```env
 DATABASE_URL="postgresql://tabletopadmin:YOUR_PASSWORD@tabletopforgedatabase.postgres.database.azure.com:5432/tabletopforge?sslmode=require"
 TABLETOPFORGE_AUTH_SECRET="use-a-long-random-secret"
-TABLETOPFORGE_AUTH_DELIVERY_MODE="screen"
+TABLETOPFORGE_AUTH_DELIVERY_MODE="email"
+TABLETOPFORGE_AUTH_FROM_EMAIL="TabletopForge <verify@yourdomain.com>"
+RESEND_API_KEY="re_YOUR_RESEND_KEY"
+TABLETOPFORGE_ALLOW_SCREEN_CODES="false"
 TABLETOPFORGE_ADMIN_EMAILS="you@example.com"
 TABLETOPFORGE_AUTO_MIGRATE="true"
 TABLETOPFORGE_SUBSCRIPTION_MONTHLY_LIMIT="10"
@@ -80,8 +83,9 @@ Notes:
 
 - `DATABASE_URL` is required for accounts, free-generation limits, and billing state.
 - `TABLETOPFORGE_AUTH_SECRET` should be a long random value and should stay server-only.
-- Password sign-in is now the primary visible account flow.
-- `TABLETOPFORGE_AUTH_DELIVERY_MODE="screen"` only affects the legacy setup/testing code flow. Before a public paid launch, keep the visible password flow or add a real email/OAuth provider.
+- Password sign-in is supported only after the email owner verifies a code and creates the account password.
+- `TABLETOPFORGE_AUTH_DELIVERY_MODE="email"` uses Resend for verification emails. Set `RESEND_API_KEY` and `TABLETOPFORGE_AUTH_FROM_EMAIL` in Azure App Service settings.
+- `TABLETOPFORGE_AUTH_DELIVERY_MODE="screen"` is for local testing only. The backend will not use screen-code mode on Azure unless `TABLETOPFORGE_ALLOW_SCREEN_CODES="true"` is deliberately set.
 - `TABLETOPFORGE_ADMIN_EMAILS` is a comma-separated allowlist for admin console access. Keep it server-side in Azure App Service settings.
 - `TABLETOPFORGE_AUTO_MIGRATE` lets the backend create the SaaS account/billing support tables on startup. Keep Prisma migrations as the source of truth; this is a deployment safety net.
 - `TABLETOPFORGE_SUBSCRIPTION_MONTHLY_LIMIT` caps subscription generations per calendar month.
@@ -115,6 +119,13 @@ From the backend folder:
 cd backend
 npm install
 npm run dev
+```
+
+For local-only screen codes, set these in `backend/.env`:
+
+```env
+TABLETOPFORGE_AUTH_DELIVERY_MODE="screen"
+TABLETOPFORGE_ALLOW_SCREEN_CODES="true"
 ```
 
 Health check:
@@ -187,6 +198,9 @@ npm start
 DATABASE_URL
 TABLETOPFORGE_AUTH_SECRET
 TABLETOPFORGE_AUTH_DELIVERY_MODE
+TABLETOPFORGE_AUTH_FROM_EMAIL
+RESEND_API_KEY
+TABLETOPFORGE_ALLOW_SCREEN_CODES
 TABLETOPFORGE_ADMIN_EMAILS
 TABLETOPFORGE_AUTO_MIGRATE
 TABLETOPFORGE_SUBSCRIPTION_MONTHLY_LIMIT
@@ -253,6 +267,9 @@ The Azure App Service application settings still need:
 DATABASE_URL
 TABLETOPFORGE_AUTH_SECRET
 TABLETOPFORGE_AUTH_DELIVERY_MODE
+TABLETOPFORGE_AUTH_FROM_EMAIL
+RESEND_API_KEY
+TABLETOPFORGE_ALLOW_SCREEN_CODES
 TABLETOPFORGE_ADMIN_EMAILS
 TABLETOPFORGE_AUTO_MIGRATE
 TABLETOPFORGE_SUBSCRIPTION_MONTHLY_LIMIT

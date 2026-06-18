@@ -12,8 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
-import { AccountPanel } from "@/components/AccountPanel";
-import { generateAiTabletop, generateTabletop, isAccountApiConfigured, type AccountState } from "@/lib/account";
+import { fetchAccount, generateAiTabletop, generateTabletop, isAccountApiConfigured, type AccountState } from "@/lib/account";
 import { generateExercise } from "@/lib/generator";
 import { extractIrpTextFromFile } from "@/lib/irp-file";
 import { saveExercise } from "@/lib/storage";
@@ -59,6 +58,16 @@ export function ExerciseForm() {
   const accountApiConfigured = isAccountApiConfigured();
 
   useEffect(() => {
+    if (!accountApiConfigured) {
+      return;
+    }
+
+    fetchAccount()
+      .then(setAccount)
+      .catch(() => setAccount(null));
+  }, [accountApiConfigured]);
+
+  useEffect(() => {
     if (!isGenerating) {
       setGenerationProgress(0);
       setGenerationStep("Preparing exercise context...");
@@ -71,13 +80,24 @@ export function ExerciseForm() {
       "Asking AI to build a unique scenario...",
       "Tailoring questions to gaps and difficulty...",
       "Saving the tabletop to your account...",
-      "Opening the live session...",
+      "Finalizing the live session...",
     ];
-    let tick = 0;
+    const startedAt = Date.now();
     const timerId = window.setInterval(() => {
-      tick += 1;
-      setGenerationProgress((current) => Math.min(92, current + (current < 50 ? 7 : 3)));
-      setGenerationStep(steps[Math.min(steps.length - 1, Math.floor(tick / 3))]);
+      const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000);
+      const targetProgress =
+        elapsedSeconds < 3
+          ? 18
+          : elapsedSeconds < 8
+            ? 42
+            : elapsedSeconds < 16
+              ? 68
+              : elapsedSeconds < 30
+                ? 84
+                : Math.min(98, 88 + Math.floor((elapsedSeconds - 30) / 6));
+
+      setGenerationProgress((current) => Math.max(current, Math.min(98, targetProgress)));
+      setGenerationStep(steps[Math.min(steps.length - 1, Math.floor(elapsedSeconds / 7))]);
     }, 700);
 
     return () => window.clearInterval(timerId);
@@ -192,8 +212,6 @@ export function ExerciseForm() {
           </div>
         </CardHeader>
         <CardContent className="space-y-6">
-          <AccountPanel compact onAccountChange={setAccount} />
-
           <div className="space-y-2">
             <Label htmlFor="organizationName">
               Organization name <RequiredMark />

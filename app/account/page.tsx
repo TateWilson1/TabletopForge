@@ -1,6 +1,23 @@
+"use client";
+
+import { useRouter } from "next/navigation";
 import { AccountPanel } from "@/components/AccountPanel";
+import type { AccountState } from "@/lib/account";
 
 export default function AccountPage() {
+  const router = useRouter();
+
+  function handleAccountChange(account: AccountState | null) {
+    if (!account || typeof window === "undefined") {
+      return;
+    }
+
+    const next = new URLSearchParams(window.location.search).get("next");
+    if (next?.startsWith("/")) {
+      router.push(next);
+    }
+  }
+
   return (
     <main className="mx-auto max-w-5xl px-4 py-10 sm:px-6 lg:px-8">
       <div className="mb-8 max-w-3xl">
@@ -9,7 +26,7 @@ export default function AccountPage() {
           Sign in, track your free tabletop generation, and manage paid tabletop access.
         </p>
       </div>
-      <AccountPanel />
+      <AccountPanel onAccountChange={handleAccountChange} />
     </main>
   );
 }

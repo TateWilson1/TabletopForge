@@ -87,11 +87,13 @@ Completed foundation:
 - Monthly subscription generation limit.
 - Account dashboard with recent PostgreSQL-backed tabletop generations.
 - Draft privacy, terms, and refund/cancellation pages.
+- Verified account creation with email-code support before password setup.
 
 Next setup steps:
 
 - Add a long random `TABLETOPFORGE_AUTH_SECRET` in Azure App Service settings.
-- Password sign-in is the primary visible account flow. Keep `TABLETOPFORGE_AUTH_DELIVERY_MODE="screen"` only for legacy setup-code testing.
+- Configure email verification with `TABLETOPFORGE_AUTH_DELIVERY_MODE="email"`, `RESEND_API_KEY`, and `TABLETOPFORGE_AUTH_FROM_EMAIL`.
+- Keep `TABLETOPFORGE_AUTH_DELIVERY_MODE="screen"` and `TABLETOPFORGE_ALLOW_SCREEN_CODES="true"` for local testing only, never for the public SaaS backend.
 - Add your owner email to `TABLETOPFORGE_ADMIN_EMAILS` before using the unlinked operations console.
 - Add OpenAI credits before enabling real AI generation paths.
 - Set `TABLETOPFORGE_AI_FEATURE_ENABLED="true"` when you are ready for OpenAI spend.

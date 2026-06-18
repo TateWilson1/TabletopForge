@@ -16,7 +16,9 @@ import {
   isAccountApiConfigured,
   loginWithPassword,
   registerWithPassword,
+  requestLoginCode,
   signOut,
+  verifyLoginCode,
   type AccountTabletop,
   type AccountState,
 } from "@/lib/account";
@@ -31,6 +33,8 @@ export function AccountPanel({
   const [account, setAccount] = useState<AccountState | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [verificationCode, setVerificationCode] = useState("");
+  const [isCodeSent, setIsCodeSent] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [isBusy, setIsBusy] = useState(false);
@@ -85,12 +89,47 @@ export function AccountPanel({
     }
   }
 
+  async function handleSendCode() {
+    setIsBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await requestLoginCode(email);
+      setIsCodeSent(true);
+      setVerificationCode(result.loginCode ?? "");
+      setNotice(result.loginCode ? `Testing code: ${result.loginCode}` : "Verification code sent. Check your email.");
+    } catch (requestError) {
+      setError(getErrorMessage(requestError));
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function handleCodeSignIn() {
+    setIsBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const nextAccount = await verifyLoginCode(email, verificationCode);
+      setAccount(nextAccount);
+      onAccountChange?.(nextAccount);
+      if (!compact) {
+        setTabletops(await fetchAccountTabletops());
+      }
+      setNotice("Signed in with verification code.");
+    } catch (requestError) {
+      setError(getErrorMessage(requestError));
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
   async function handleCreateAccount() {
     setIsBusy(true);
     setError("");
     setNotice("");
     try {
-      const nextAccount = await registerWithPassword(email, password);
+      const nextAccount = await registerWithPassword(email, password, verificationCode);
       setAccount(nextAccount);
       onAccountChange?.(nextAccount);
       if (!compact) {
@@ -250,10 +289,38 @@ export function AccountPanel({
           <Button onClick={handlePasswordSignIn} disabled={isBusy || email.trim().length < 5 || password.length < 1}>
             Sign In
           </Button>
-          <Button variant="outline" onClick={handleCreateAccount} disabled={isBusy || email.trim().length < 5 || password.length < 10}>
-            Create Account
+          <Button variant="outline" onClick={handleSendCode} disabled={isBusy || email.trim().length < 5}>
+            Send Code
           </Button>
         </div>
+
+        {isCodeSent ? (
+          <div className="space-y-4 rounded-md border border-primary/25 bg-primary/10 p-4">
+            <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+              <div className="space-y-2">
+                <Label htmlFor={compact ? "compactCode" : "accountCode"}>Verification code</Label>
+                <Input
+                  id={compact ? "compactCode" : "accountCode"}
+                  inputMode="numeric"
+                  value={verificationCode}
+                  onChange={(event) => setVerificationCode(event.target.value)}
+                  placeholder="6-digit code"
+                />
+              </div>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Button variant="outline" onClick={handleCodeSignIn} disabled={isBusy || verificationCode.trim().length < 6}>
+                Sign In With Code
+              </Button>
+              <Button onClick={handleCreateAccount} disabled={isBusy || verificationCode.trim().length < 6 || password.length < 10}>
+                Create Verified Account
+              </Button>
+            </div>
+            <p className="text-sm leading-6 text-muted-foreground">
+              Account creation requires this code so someone cannot register using an email address they do not control.
+            </p>
+          </div>
+        ) : null}
 
         <div className="flex flex-wrap gap-2">
           <Badge variant="outline">1 free generation</Badge>

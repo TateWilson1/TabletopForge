@@ -544,6 +544,7 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
               {activeFocus.id === "question" ? (
                 <PromptCard
                   prompt={activePrompt}
+                  selectedDecision={decisionResponses[activeStep.title] ?? ""}
                   currentIndex={activePromptIndex}
                   total={activeStep.prompts.length}
                   onBack={() => movePrompt(-1)}
@@ -1094,17 +1095,23 @@ function TriageFacts({ knownFacts, unknowns }: { knownFacts: string[]; unknowns:
 
 function PromptCard({
   prompt,
+  selectedDecision,
   currentIndex,
   total,
   onBack,
   onNext,
 }: {
   prompt: string;
+  selectedDecision: string;
   currentIndex: number;
   total: number;
   onBack: () => void;
   onNext: () => void;
 }) {
+  const decisionFollowUp = selectedDecision
+    ? `Because you chose: ${selectedDecision}. What could go wrong with that path, what evidence or approval do you need, and what would make you change course?`
+    : "";
+
   return (
     <section className="rounded-md border border-border bg-background/45 p-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1128,6 +1135,12 @@ function PromptCard({
       <div className="mt-4 rounded-md border border-primary/25 bg-primary/10 p-4">
         <ReadingText text={prompt} className="text-base leading-7 text-foreground" speed={34} />
       </div>
+      {decisionFollowUp ? (
+        <div className="mt-4 rounded-md border border-accent/35 bg-accent/10 p-4">
+          <p className="text-sm font-medium text-accent">Response path check</p>
+          <ReadingText text={decisionFollowUp} className="mt-2 text-sm leading-6 text-muted-foreground" speed={30} />
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -1275,7 +1288,7 @@ async function resolveInject({
   onNotice: (notice: string) => void;
 }): Promise<Inject> {
   if (!useAi) {
-    return normalizeSessionInject(fallbackInject, exercise.overview.industry);
+    return normalizeSessionInject(buildDecisionConsequenceInject(fallbackInject, selectedDecision), exercise.overview.industry);
   }
 
   try {
@@ -1299,8 +1312,48 @@ async function resolveInject({
     }, exercise.overview.industry);
   } catch {
     onNotice("AI is unavailable right now, so TabletopForge used a built-in twist.");
-    return normalizeSessionInject(fallbackInject, exercise.overview.industry);
+    return normalizeSessionInject(buildDecisionConsequenceInject(fallbackInject, selectedDecision), exercise.overview.industry);
   }
+}
+
+function buildDecisionConsequenceInject(fallbackInject: Inject, selectedDecision: string): Inject {
+  const response = selectedDecision.replace(/^Custom response:\s*/i, "").trim();
+  if (!response) {
+    return fallbackInject;
+  }
+
+  const normalized = response.toLowerCase();
+  let text = `The team starts down this path: "${response}". New information creates friction: ${fallbackInject.text}`;
+  let unknown = "What assumption in the selected response path needs to be revisited now?";
+
+  if (/\b(memory|volatile|forensic|evidence|image|preserve)\b/.test(normalized)) {
+    text =
+      "Before responders finish preserving evidence, the affected machine loses power and reboots. The team now has to explain what evidence is still available and whether the IRP says how to protect volatile data.";
+    unknown = "What evidence can still be trusted, and who owns the preservation decision?";
+  } else if (/\b(isolate|contain|disconnect|network|shut\s?down|disable)\b/.test(normalized)) {
+    text =
+      "The containment action slows the suspected spread, but it also interrupts a business process another team says is critical. Leadership wants to know who approved the impact and what the rollback plan is.";
+    unknown = "Who can approve high-impact containment when speed and business continuity conflict?";
+  } else if (/\b(wait|monitor|investigate|observe|hold)\b/.test(normalized)) {
+    text =
+      "While the team continues investigating, another report arrives from a different part of the organization. The group must decide whether waiting improved confidence or allowed the incident to expand.";
+    unknown = "What threshold should trigger escalation instead of continued monitoring?";
+  } else if (/\b(backup|restore|recovery|rebuild)\b/.test(normalized)) {
+    text =
+      "The team turns toward recovery, but the latest backup validation is older than expected. Now they need to decide whether to restore, keep investigating, or accept temporary business disruption.";
+    unknown = "What proof is required before recovery actions are trusted?";
+  } else if (/\b(communicat|notify|email|announce|customer|regulator|legal)\b/.test(normalized)) {
+    text =
+      "A draft update is forwarded outside the response team before facts are fully confirmed. The team has to correct the message without creating confusion or overpromising.";
+    unknown = "Who approves communications, and what facts are confirmed enough to share?";
+  }
+
+  return {
+    ...fallbackInject,
+    text,
+    fact: text,
+    unknown,
+  };
 }
 
 function normalizeSessionInject(inject: Inject, industry: GeneratedExercise["overview"]["industry"]): Inject {
@@ -1770,8 +1823,10 @@ function buildFacilitatorSteps(exercise: GeneratedExercise): FacilitatorStep[] {
         "Which systems, teams, or business processes are out of scope today.",
       ],
       decisions: [
-        "Who owns note taking?",
-        "What is in scope for today's discussion?",
+        "Start with roles, scope, and note capture before reading the scenario.",
+        "Start with the scenario immediately and assign roles only when needed.",
+        "Have business leaders drive the first decisions while technical responders advise.",
+        "Have technical responders triage first, then brief leadership after the facts are clearer.",
         ...maturityAdditions.kickoffDecisions,
       ],
       injects: buildInjects(exercise, "kickoff", [

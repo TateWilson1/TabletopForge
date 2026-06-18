@@ -106,13 +106,15 @@ app.post("/api/auth/request-code", async (request, response) => {
     );
 
     const deliveryMode = getAuthDeliveryMode();
+    await deliverLoginCode(email, code, deliveryMode);
+
     response.json({
       ok: true,
       deliveryMode,
       expiresAt: expiresAt.toISOString(),
-      loginCode: deliveryMode === "screen" ? code : undefined,
+      loginCode: shouldReturnScreenLoginCode(deliveryMode) ? code : undefined,
       message:
-        deliveryMode === "screen"
+        shouldReturnScreenLoginCode(deliveryMode)
           ? "Temporary setup mode is showing the login code on screen."
           : "If this email exists, a login code will be sent.",
     });
@@ -158,19 +160,26 @@ app.post("/api/auth/password-register", async (request, response) => {
     requireDatabase();
     const email = normalizeEmail(request.body?.email);
     const password = typeof request.body?.password === "string" ? request.body.password : "";
+    const code = typeof request.body?.code === "string" ? request.body.code.trim() : "";
 
-    if (!email || !isValidPassword(password)) {
-      response.status(400).json({ error: "Enter a valid email and a password with at least 10 characters." });
+    if (!email || !isValidPassword(password) || !code) {
+      response.status(400).json({ error: "Enter a valid email, verification code, and a password with at least 10 characters." });
       return;
     }
 
-    const user = await ensureUser(email);
     const existing = await getUserPasswordRecord(email);
     if (existing?.passwordHash) {
       response.status(409).json({ error: "This account already has a password. Sign in instead." });
       return;
     }
 
+    const loginCode = await findUsableLoginCode(email);
+    if (!loginCode || loginCode.codeHash !== hashSecret(`${email}:${code}`)) {
+      response.status(401).json({ error: "Invalid or expired verification code." });
+      return;
+    }
+
+    const user = existing ? await getUserById(existing.id) : await ensureUser(email);
     const passwordRecord = hashPassword(password);
     await dbQuery(
       `UPDATE "users"
@@ -178,6 +187,7 @@ app.post("/api/auth/password-register", async (request, response) => {
        WHERE "id" = $4`,
       [passwordRecord.hash, passwordRecord.salt, passwordRecord.iterations, user.id],
     );
+    await dbQuery(`UPDATE "login_codes" SET "usedAt" = NOW() WHERE "id" = $1`, [loginCode.id]);
 
     const session = await createSession(user.id);
     const signedInUser = await getUserById(user.id);
@@ -1742,7 +1752,68 @@ function getPublicAppUrl(request) {
 }
 
 function getAuthDeliveryMode() {
-  return process.env.TABLETOPFORGE_AUTH_DELIVERY_MODE === "email" ? "email" : "screen";
+  if (process.env.TABLETOPFORGE_AUTH_DELIVERY_MODE === "screen" && allowScreenAuthCodes()) {
+    return "screen";
+  }
+
+  if (!isHostedProduction() && process.env.TABLETOPFORGE_AUTH_DELIVERY_MODE !== "email") {
+    return "screen";
+  }
+
+  return "email";
+}
+
+function isHostedProduction() {
+  return process.env.NODE_ENV === "production" || Boolean(process.env.WEBSITE_SITE_NAME);
+}
+
+function allowScreenAuthCodes() {
+  return process.env.TABLETOPFORGE_ALLOW_SCREEN_CODES === "true";
+}
+
+function shouldReturnScreenLoginCode(deliveryMode) {
+  return deliveryMode === "screen";
+}
+
+async function deliverLoginCode(email, code, deliveryMode) {
+  if (deliveryMode === "screen") {
+    return;
+  }
+
+  await sendLoginCodeEmail(email, code);
+}
+
+async function sendLoginCodeEmail(email, code) {
+  const apiKey = process.env.RESEND_API_KEY;
+  const fromEmail = process.env.TABLETOPFORGE_AUTH_FROM_EMAIL;
+
+  if (!apiKey || !fromEmail) {
+    throw Object.assign(new Error("Email verification is not configured. Set RESEND_API_KEY and TABLETOPFORGE_AUTH_FROM_EMAIL."), {
+      statusCode: 503,
+    });
+  }
+
+  const result = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      from: fromEmail,
+      to: email,
+      subject: "Your TabletopForge verification code",
+      text: `Your TabletopForge verification code is ${code}. It expires in ${LOGIN_CODE_MINUTES} minutes.`,
+      html: `<p>Your TabletopForge verification code is <strong>${code}</strong>.</p><p>It expires in ${LOGIN_CODE_MINUTES} minutes.</p>`,
+    }),
+  });
+
+  if (!result.ok) {
+    const detail = await result.text().catch(() => "");
+    throw Object.assign(new Error(`Could not send verification email.${detail ? ` ${detail.slice(0, 180)}` : ""}`), {
+      statusCode: 502,
+    });
+  }
 }
 
 function isAiFeatureEnabled() {
