@@ -51,6 +51,7 @@ export interface ExerciseOptions {
   includeLessonsLearned: boolean;
   hasHumanFacilitator: boolean;
   customScenarioDetails?: string;
+  noIrp?: boolean;
   irpText?: string;
   irpFileName?: string;
 }
@@ -84,9 +85,24 @@ export interface GeneratedExercise {
   expectedDecisions: string[];
   facilitatorNotes: string[];
   irpAnalysis?: IrpAnalysis;
+  starterIrpTemplate?: StarterIrpTemplate;
   lessonsLearnedTemplate?: LessonsLearnedItem[];
   executiveSummary: string;
   markdownReport: string;
+}
+
+export interface StarterIrpTemplate {
+  generatedBecause: string;
+  sections: StarterIrpSection[];
+  missingInputs: string[];
+  nextSteps: string[];
+}
+
+export interface StarterIrpSection {
+  title: string;
+  purpose: string;
+  draftText: string;
+  fillIn: string[];
 }
 
 export interface IrpGapFinding {
@@ -139,6 +155,7 @@ export interface AiSessionContext {
   scenario: ScenarioType;
   maturityLevel: MaturityLevel;
   hasIrpAnalysis: boolean;
+  needsStarterIrp: boolean;
   irpFindings: Array<{
     id: string;
     label: string;
@@ -174,6 +191,7 @@ export interface CompletedSession {
   improvementPlan: CompletedSessionImprovementPlanItem[];
   unresolvedUnknowns: string[];
   recommendedNextTabletop: string;
+  starterIrpTemplate?: StarterIrpTemplate;
   decisions: CompletedSessionDecision[];
   revealedInjects: CompletedSessionInject[];
   completedSteps: string[];

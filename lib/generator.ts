@@ -1,6 +1,6 @@
 import { scenarioContent } from "@/lib/tabletop-data";
 import { analyzeIrp, getTailoredIrpQuestions } from "@/lib/irp-analyzer";
-import type { ExerciseOptions, GeneratedExercise, LessonsLearnedItem } from "@/lib/types";
+import type { ExerciseOptions, GeneratedExercise, LessonsLearnedItem, StarterIrpTemplate } from "@/lib/types";
 
 const baseParticipants = [
   "Incident Lead",
@@ -207,10 +207,12 @@ export function generateExercise(options: ExerciseOptions): GeneratedExercise {
   const industryProfile = industryProfiles[options.industry];
   const sizeProfile = sizeProfiles[options.organizationSize];
   const id = crypto.randomUUID();
+  const organization = options.organizationName.trim();
   const scenarioSeed = `${id}:${options.scenarioType}:${options.industry}:${options.organizationSize}:${options.maturityLevel}`;
   const contextualQuestions = buildContextualQuestions(options, irpAnalysis);
   const contextualGapQuestions = buildContextualGapQuestions(options, irpAnalysis);
   const contextualDecisions = buildContextualDecisions(options, irpAnalysis);
+  const starterIrpTemplate = options.noIrp ? buildStarterIrpTemplate(options, organization) : undefined;
   const participants = uniqueStrings([...baseParticipants, ...industryProfile.participants, ...sizeProfile.participants]);
   const questionLimit = getQuestionLimit(options);
 
@@ -250,7 +252,6 @@ export function generateExercise(options: ExerciseOptions): GeneratedExercise {
   );
 
   const generatedAt = new Date().toISOString();
-  const organization = options.organizationName.trim();
   const customScenarioDetails = options.customScenarioDetails?.trim();
   const overview = {
     organization,
@@ -274,6 +275,7 @@ export function generateExercise(options: ExerciseOptions): GeneratedExercise {
       sizeProfile.scenarioContext,
       buildMaturityContext(options.maturityLevel, irpAnalysis),
       buildIrpPressureContext(options, irpAnalysis),
+      options.noIrp ? "No IRP is currently available, so the exercise should capture decisions that can become a starter incident response plan." : "",
       customScenarioDetails ? `Additional exercise context: ${customScenarioDetails}` : "",
     ]
       .filter(Boolean)
@@ -282,6 +284,7 @@ export function generateExercise(options: ExerciseOptions): GeneratedExercise {
     objectives: tuneByMaturity(
       [
         ...(irpAnalysis ? ["Validate whether known IRP gaps would slow or weaken the response."] : []),
+        ...(starterIrpTemplate ? ["Create starter IRP content from the roles, decisions, contacts, and gaps discovered during the tabletop."] : []),
         ...buildContextualObjectives(options, irpAnalysis),
         ...industryProfile.objectives,
         ...sizeProfile.objectives,
@@ -295,8 +298,9 @@ export function generateExercise(options: ExerciseOptions): GeneratedExercise {
     expectedDecisions: uniqueStrings([...contextualDecisions, ...industryProfile.expectedDecisions, ...sizeProfile.expectedDecisions, ...content.expectedDecisions]),
     facilitatorNotes,
     irpAnalysis,
+    starterIrpTemplate,
     lessonsLearnedTemplate: options.includeLessonsLearned ? lessonsLearnedTemplate : undefined,
-    executiveSummary: `${organization} will walk through a realistic ${options.scenarioType.toLowerCase()} tabletop exercise designed for ${options.industry.toLowerCase()} organizations with ${options.organizationSize} employees. ${industryProfile.executiveFocus} ${sizeProfile.executiveFocus} The discussion should reveal whether the incident response plan clearly defines escalation, containment authority, communications, evidence handling, and after-action ownership.${customScenarioDetails ? " The custom scenario context has been included in the scenario summary and should guide discussion examples." : ""}${irpAnalysis ? ` The uploaded IRP scan found ${irpAnalysis.findings.filter((finding) => finding.status !== "found").length} likely weak or missing areas, so the questions emphasize those plan gaps.` : ""}`,
+    executiveSummary: `${organization} will walk through a realistic ${options.scenarioType.toLowerCase()} tabletop exercise designed for ${options.industry.toLowerCase()} organizations with ${options.organizationSize} employees. ${industryProfile.executiveFocus} ${sizeProfile.executiveFocus} The discussion should reveal whether the incident response plan clearly defines escalation, containment authority, communications, evidence handling, and after-action ownership.${customScenarioDetails ? " The custom scenario context has been included in the scenario summary and should guide discussion examples." : ""}${irpAnalysis ? ` The uploaded IRP scan found ${irpAnalysis.findings.filter((finding) => finding.status !== "found").length} likely weak or missing areas, so the questions emphasize those plan gaps.` : ""}${options.noIrp ? " Because no IRP is available, the final report will include a starter IRP outline built from the exercise decisions." : ""}`,
   };
 
   const markdownReport = createMarkdownReport(exerciseWithoutMarkdown);
@@ -315,6 +319,100 @@ function buildPurpose(organization: string, options: ExerciseOptions) {
   };
 
   return `Help ${organization} validate incident response roles, communications, evidence expectations, and decision authority for a ${options.scenarioType.toLowerCase()} scenario ${maturityStyle[options.maturityLevel]}.`;
+}
+
+function buildStarterIrpTemplate(options: ExerciseOptions, organization: string): StarterIrpTemplate {
+  const scenario = options.scenarioType.toLowerCase();
+  const industry = options.industry.toLowerCase();
+
+  return {
+    generatedBecause: "No incident response plan was uploaded. This starter outline should be completed and reviewed after the tabletop; it is not a substitute for legal, regulatory, or security review.",
+    sections: [
+      {
+        title: "Purpose and Scope",
+        purpose: "Define what the plan covers and when it applies.",
+        draftText: `${organization} will use this incident response plan to prepare for, detect, coordinate, contain, recover from, and learn from cybersecurity incidents affecting its people, systems, data, clients, vendors, or operations.`,
+        fillIn: [
+          "Systems, locations, business processes, and data types covered by the plan",
+          `Industry-specific obligations for a ${industry} organization`,
+          "Who owns annual review and updates",
+        ],
+      },
+      {
+        title: "Incident Roles and Contact Tree",
+        purpose: "Make ownership obvious before pressure starts.",
+        draftText: "The organization should name a primary incident coordinator, backup coordinator, technical lead, business owner, communications owner, executive approver, legal/compliance contact, and outside support contacts.",
+        fillIn: [
+          "Primary and backup names with phone/email",
+          "Outside IT, cloud, software, cyber insurance, legal, law enforcement, and regulator contacts as applicable",
+          "After-hours approval path",
+        ],
+      },
+      {
+        title: "Severity Levels and Escalation",
+        purpose: "Help the team decide when an event becomes a formal incident.",
+        draftText: "Incidents should be classified by operational impact, data sensitivity, number of affected users or clients, legal/compliance exposure, financial impact, and public/customer visibility.",
+        fillIn: [
+          "Low, medium, high, and critical definitions",
+          "Who can declare each level",
+          "What each level activates",
+        ],
+      },
+      {
+        title: "Detection, Reporting, and First 30 Minutes",
+        purpose: "Give non-technical staff a simple path to report concerns.",
+        draftText: `For a suspected ${scenario} event, staff should report what they saw, when it happened, who is affected, screenshots or message details if safe, and any business impact. The team should avoid deleting evidence or taking unapproved disruptive action.`,
+        fillIn: [
+          "Report intake channel",
+          "Minimum facts to collect",
+          "What staff should not do",
+        ],
+      },
+      {
+        title: "Evidence Preservation",
+        purpose: "Balance fast containment with preserving facts needed later.",
+        draftText: "The response team should document timeline, affected accounts/systems, logs reviewed, screenshots, communications, actions taken, approvals, and custody of exported evidence.",
+        fillIn: [
+          "Log sources and retention periods",
+          "Who may collect/export evidence",
+          "Where evidence is stored",
+        ],
+      },
+      {
+        title: "Containment, Recovery, and Communications",
+        purpose: "Define who can act and who must approve messaging.",
+        draftText: "Containment and recovery actions should be approved based on severity, business impact, evidence risk, and legal/compliance needs. Communications should separate confirmed facts from assumptions.",
+        fillIn: [
+          "Containment actions allowed without approval",
+          "Recovery validation steps",
+          "Internal, customer/client, regulator, media, and leadership update owners",
+        ],
+      },
+      {
+        title: "Post-Incident Review and Improvement",
+        purpose: "Turn lessons learned into plan updates.",
+        draftText: "After each incident or tabletop, the organization should document what happened, what decisions were made, what was unclear, what slowed response, and which plan updates are needed.",
+        fillIn: [
+          "After-action meeting owner",
+          "Action item tracker",
+          "Retest schedule",
+        ],
+      },
+    ],
+    missingInputs: [
+      "Named incident coordinator and backup",
+      "Severity definitions and declaration authority",
+      "Vendor, legal, insurer, regulator, and leadership contact list",
+      "Evidence locations and retention expectations",
+      "Communication approval path",
+      "Recovery validation steps",
+    ],
+    nextSteps: [
+      "Use the tabletop notes to fill the starter IRP sections.",
+      "Have leadership, legal/compliance, IT/security, and business owners review the draft.",
+      "Run a shorter follow-up tabletop against the completed draft within 30 to 90 days.",
+    ],
+  };
 }
 
 const scenarioVariationBank: Record<ExerciseOptions["scenarioType"], string[]> = {
@@ -463,6 +561,14 @@ function buildContextualQuestions(options: ExerciseOptions, analysis?: Generated
     questions.push("In plain language, what happened, who needs to know, and what should be written down first?");
   }
 
+  if (options.noIrp) {
+    questions.unshift(
+      "If this happened today with no written IRP, who would coordinate the response first?",
+      "What facts would the team need before deciding whether this is a formal incident?",
+      "Which contact names, backup contacts, vendors, legal/compliance contacts, and leadership approvals should be written into a starter IRP?",
+    );
+  }
+
   return questions;
 }
 
@@ -479,6 +585,14 @@ function buildContextualGapQuestions(options: ExerciseOptions, analysis?: Genera
 
   const gaps = analysis?.findings.filter((finding) => finding.status !== "found").slice(0, 3) ?? [];
   questions.push(...gaps.map((finding) => `What would fail first if the IRP gap for ${finding.label.toLowerCase()} appeared during this scenario?`));
+
+  if (options.noIrp) {
+    questions.unshift(
+      "What minimum IRP sections must be drafted before the organization can run this exercise again?",
+      "Which incident severity levels, escalation thresholds, and decision owners need to be defined first?",
+      "What evidence, notification, communications, and recovery steps are currently only tribal knowledge?",
+    );
+  }
 
   return questions;
 }
@@ -499,6 +613,14 @@ function buildContextualDecisions(options: ExerciseOptions, analysis?: Generated
   const topGap = analysis?.findings.find((finding) => finding.status !== "found");
   if (topGap) {
     decisions.push(`Who owns the ${topGap.label.toLowerCase()} gap after the exercise?`);
+  }
+
+  if (options.noIrp) {
+    decisions.unshift(
+      "Who owns the starter IRP after this tabletop?",
+      "Which severity threshold would activate leadership, legal, communications, and outside support?",
+      "Which response steps must be documented before the next exercise?",
+    );
   }
 
   return decisions;
@@ -636,6 +758,7 @@ function createMarkdownReport(exercise: Omit<GeneratedExercise, "markdownReport"
     listSection("Exercise Objectives", exercise.objectives),
     listSection("Suggested Participants", exercise.suggestedParticipants),
     irpAnalysisSection(exercise.irpAnalysis),
+    starterIrpTemplateSection(exercise.starterIrpTemplate),
     listSection("Discussion Questions", exercise.discussionQuestions),
     listSection("IRP Gap Discovery Questions", exercise.gapDiscoveryQuestions),
     listSection("Expected Decisions", exercise.expectedDecisions),
@@ -689,6 +812,38 @@ function irpAnalysisSection(analysis: GeneratedExercise["irpAnalysis"]) {
       lines.push(`- ${finding.label} (${finding.status}): ${finding.summary}`);
       lines.push(`  - Improvement: ${finding.improvement}`);
     });
+  lines.push("");
+
+  return lines.join("\n");
+}
+
+function starterIrpTemplateSection(template: GeneratedExercise["starterIrpTemplate"]) {
+  if (!template) {
+    return "";
+  }
+
+  const lines = [
+    "## Starter IRP Template",
+    template.generatedBecause,
+    "",
+  ];
+
+  template.sections.forEach((section) => {
+    lines.push(`### ${section.title}`);
+    lines.push(`Purpose: ${section.purpose}`);
+    lines.push("");
+    lines.push(section.draftText);
+    lines.push("");
+    lines.push("Fill in:");
+    section.fillIn.forEach((item) => lines.push(`- ${item}`));
+    lines.push("");
+  });
+
+  lines.push("### Missing Inputs To Collect");
+  template.missingInputs.forEach((item) => lines.push(`- ${item}`));
+  lines.push("");
+  lines.push("### Next Steps");
+  template.nextSteps.forEach((item) => lines.push(`- ${item}`));
   lines.push("");
 
   return lines.join("\n");

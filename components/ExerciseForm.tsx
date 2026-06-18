@@ -39,6 +39,7 @@ const defaultOptions: ExerciseOptions = {
   includeLessonsLearned: true,
   hasHumanFacilitator: false,
   customScenarioDetails: "",
+  noIrp: false,
   irpText: "",
   irpFileName: "",
 };
@@ -66,7 +67,7 @@ export function ExerciseForm() {
 
     const steps = [
       "Preparing exercise context...",
-      "Reading IRP and optional details...",
+      options.noIrp ? "Preparing starter IRP mode..." : "Reading IRP and optional details...",
       "Asking AI to build a unique scenario...",
       "Tailoring questions to gaps and difficulty...",
       "Saving the tabletop to your account...",
@@ -80,7 +81,7 @@ export function ExerciseForm() {
     }, 700);
 
     return () => window.clearInterval(timerId);
-  }, [isGenerating]);
+  }, [isGenerating, options.noIrp]);
 
   function updateOption<K extends keyof ExerciseOptions>(key: K, value: ExerciseOptions[K]) {
     setOptions((current) => ({ ...current, [key]: value }));
@@ -103,6 +104,7 @@ export function ExerciseForm() {
 
     try {
       const text = await extractIrpTextFromFile(file);
+      updateOption("noIrp", false);
       updateOption("irpText", text);
       updateOption("irpFileName", file.name);
       setIrpNotice(`Loaded ${file.name}. Extracted ${Math.max(1, text.trim().split(/\s+/).filter(Boolean).length)} words.`);
@@ -115,7 +117,20 @@ export function ExerciseForm() {
   function clearIrp() {
     updateOption("irpText", "");
     updateOption("irpFileName", "");
+    updateOption("noIrp", false);
     setIrpNotice("");
+  }
+
+  function toggleNoIrp(checked: boolean) {
+    updateOption("noIrp", checked);
+    if (checked) {
+      updateOption("irpText", "");
+      updateOption("irpFileName", "No IRP provided");
+      setIrpNotice("TabletopForge will use the exercise decisions to draft a starter IRP outline.");
+    } else {
+      updateOption("irpFileName", "");
+      setIrpNotice("");
+    }
   }
 
   async function handleGenerate() {
@@ -245,10 +260,10 @@ export function ExerciseForm() {
               <div>
                 <Label>Incident response plan</Label>
                 <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                  Upload a PDF, Word document, or text IRP to tailor questions around likely gaps.
+                  Upload a PDF, Word document, or text IRP, or start without one and build a starter plan from the tabletop.
                 </p>
               </div>
-              {options.irpText ? (
+              {options.irpText || options.noIrp ? (
                 <Button variant="ghost" size="sm" onClick={clearIrp}>
                   <X className="size-4" suppressHydrationWarning />
                   Clear
@@ -265,6 +280,23 @@ export function ExerciseForm() {
               </div>
             </div>
 
+            <div className="rounded-md border border-accent/35 bg-accent/10 p-3">
+              <div className="flex items-start gap-3">
+                <Checkbox
+                  id="noIrp"
+                  checked={options.noIrp === true}
+                  onCheckedChange={(value) => toggleNoIrp(value === true)}
+                  className="mt-1"
+                />
+                <div>
+                  <Label htmlFor="noIrp">We do not have an IRP yet</Label>
+                  <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                    The exercise will identify the roles, thresholds, evidence needs, contacts, and recovery steps needed for a starter IRP.
+                  </p>
+                </div>
+              </div>
+            </div>
+
             <div className="grid gap-3 sm:grid-cols-[0.72fr_1.28fr]">
               <div className="space-y-2">
                 <Label htmlFor="irpFile">Upload IRP</Label>
@@ -272,6 +304,7 @@ export function ExerciseForm() {
                   id="irpFile"
                   type="file"
                   accept=".pdf,.docx,.txt,.md,.rtf,.csv,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown"
+                  disabled={options.noIrp === true}
                   onChange={(event) => handleIrpUpload(event.target.files?.[0])}
                 />
               </div>
@@ -280,8 +313,10 @@ export function ExerciseForm() {
                 <Textarea
                   id="irpText"
                   value={options.irpText}
+                  disabled={options.noIrp === true}
                   onChange={(event) => {
                     updateOption("irpText", event.target.value);
+                    updateOption("noIrp", false);
                     updateOption("irpFileName", event.target.value.trim() ? "Pasted IRP text" : "");
                     setIrpNotice("");
                   }}
@@ -290,6 +325,14 @@ export function ExerciseForm() {
                 />
               </div>
             </div>
+
+            {options.noIrp ? (
+              <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+                <ShieldCheck className="size-4 text-accent" suppressHydrationWarning />
+                <span>No IRP mode enabled</span>
+                <span>Starter IRP template will be included in the report</span>
+              </div>
+            ) : null}
 
             {options.irpText ? (
               <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">

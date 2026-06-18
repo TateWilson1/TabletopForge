@@ -88,8 +88,35 @@ export function buildExerciseHtmlReport(exercise: GeneratedExercise) {
       <h2>Facilitator Notes</h2>
       ${list(exercise.facilitatorNotes)}
       ${exercise.irpAnalysis ? `<h2>IRP Gap Analysis</h2><p>${escapeHtml(exercise.irpAnalysis.overallSummary)}</p>${list(exercise.irpAnalysis.findings.filter((finding) => finding.status !== "found").map((finding) => `${finding.label}: ${finding.summary} ${finding.improvement}`))}` : ""}
+      ${exercise.starterIrpTemplate ? starterIrpTemplateHtml(exercise.starterIrpTemplate) : ""}
     `,
   );
+}
+
+function starterIrpTemplateHtml(template: GeneratedExercise["starterIrpTemplate"]) {
+  if (!template) {
+    return "";
+  }
+
+  return `
+    <h2>Starter IRP Template</h2>
+    <p>${escapeHtml(template.generatedBecause)}</p>
+    ${template.sections
+      .map(
+        (section) => `
+          <h3>${escapeHtml(section.title)}</h3>
+          <p><strong>Purpose:</strong> ${escapeHtml(section.purpose)}</p>
+          <p>${escapeHtml(section.draftText)}</p>
+          <p><strong>Fill in:</strong></p>
+          ${list(section.fillIn)}
+        `,
+      )
+      .join("")}
+    <h3>Missing Inputs To Collect</h3>
+    ${list(template.missingInputs)}
+    <h3>Next Steps</h3>
+    ${list(template.nextSteps)}
+  `;
 }
 
 export function buildCompletedSessionHtmlReport(session: CompletedSession) {
@@ -138,6 +165,7 @@ export function buildCompletedSessionHtmlReport(session: CompletedSession) {
       ${paragraph(session.actionItems)}
       <h2>Recommended Next Tabletop</h2>
       ${paragraph(session.recommendedNextTabletop)}
+      ${session.starterIrpTemplate ? starterIrpTemplateHtml(session.starterIrpTemplate) : ""}
     `,
   );
 }

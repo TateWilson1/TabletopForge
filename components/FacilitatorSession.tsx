@@ -100,6 +100,7 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
   const [activeIndex, setActiveIndex] = useState(0);
   const [activeFocusIndex, setActiveFocusIndex] = useState(0);
   const [decisionIndexes, setDecisionIndexes] = useState<Record<string, number>>({});
+  const [decisionResponses, setDecisionResponses] = useState<Record<string, string>>({});
   const [revealedInjects, setRevealedInjects] = useState<RevealedInject[]>([]);
   const [decisionStatuses, setDecisionStatuses] = useState<Record<string, boolean>>({});
   const [sessionNotes, setSessionNotes] = useState("");
@@ -147,8 +148,9 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
   const activeFocus = focusStages[activeFocusIndex] ?? focusStages[0];
   const nextFocusLabel = focusStages[activeFocusIndex + 1]?.label ?? "";
   const activeDecisionIndex = Math.min(decisionIndexes[activeStep.title] ?? 0, Math.max(0, activeStep.decisions.length - 1));
-  const activeDecision = activeStep.decisions[activeDecisionIndex] ?? "Confirm the next decision the team needs to make.";
+  const activeDecision = decisionResponses[activeStep.title] || activeStep.decisions[activeDecisionIndex] || "Confirm the next decision the team needs to make.";
   const canUseAiInjects = TABLETOPFORGE_API_URL.length > 0 && (hasSessionToken || aiAccessCode.trim().length > 0);
+  const needsDecisionResponse = activeFocus.id === "decision" && !decisionResponses[activeStep.title];
 
   const clearDiceTimers = useCallback(() => {
     if (diceIntervalRef.current !== null) {
@@ -219,8 +221,9 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
         knownFacts,
         unknowns,
         revealedInjects,
-        sessionNotes,
+        sessionNotes: buildSessionNotesWithDecision(sessionNotes, decisionResponses[activeStep.title]),
         aiAccessCode,
+        selectedDecision: decisionResponses[activeStep.title] || "",
         useAi: canUseAiInjects,
         onNotice: () => undefined,
       });
@@ -237,6 +240,7 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
     availableInjects,
     canUseAiInjects,
     clearDiceTimers,
+    decisionResponses,
     diceRoll,
     exercise,
     isRollingDice,
@@ -273,6 +277,7 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
     setCompletedSteps({});
     setPromptIndexes({});
     setDecisionIndexes({});
+    setDecisionResponses({});
     setFacilitatorHint("");
     setDiceRoll(null);
     setIsRollingDice(false);
@@ -288,6 +293,28 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
 
   function toggleDecision(decision: string, checked: boolean) {
     setDecisionStatuses((current) => ({ ...current, [decisionKey(activeStep.title, decision)]: checked }));
+  }
+
+  function chooseDecision(decision: string) {
+    if (!decision.trim()) {
+      setDecisionResponses((current) => {
+        const next = { ...current };
+        delete next[activeStep.title];
+        return next;
+      });
+      return;
+    }
+
+    setDecisionResponses((current) => ({ ...current, [activeStep.title]: decision }));
+    setDecisionStatuses((current) => {
+      const next = { ...current };
+      activeStep.decisions.forEach((item) => {
+        next[decisionKey(activeStep.title, item)] = item === decision;
+      });
+      next[decisionKey(activeStep.title, decision)] = true;
+      return next;
+    });
+    setFacilitatorHint("");
   }
 
   function toggleStepComplete(checked: boolean) {
@@ -360,7 +387,7 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
 
   async function copySessionSummary() {
     await navigator.clipboard.writeText(
-      completedSession?.markdownReport ?? buildSessionSummary(exercise, revealedInjects, steps, decisionStatuses, {}, completedSteps, sessionNotes, actionItems),
+      completedSession?.markdownReport ?? buildSessionSummary(exercise, revealedInjects, steps, decisionStatuses, decisionResponses, {}, completedSteps, sessionNotes, actionItems),
     );
     setExportNotice(completedSession ? "Scorecard summary copied." : "Session summary copied.");
   }
@@ -376,7 +403,7 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
       return;
     }
 
-    const draftSession = buildCompletedSession(exercise, revealedInjects, steps, decisionStatuses, {}, completedSteps, sessionNotes, actionItems);
+    const draftSession = buildCompletedSession(exercise, revealedInjects, steps, decisionStatuses, decisionResponses, {}, completedSteps, sessionNotes, actionItems);
     downloadTextFile(
       buildCompletedSessionHtmlReport(draftSession),
       `${safeFilename(exercise.overview.organization)}-session-report.html`,
@@ -386,7 +413,7 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
   }
 
   function endExercise() {
-    const scorecard = buildCompletedSession(exercise, revealedInjects, steps, decisionStatuses, {}, completedSteps, sessionNotes, actionItems);
+    const scorecard = buildCompletedSession(exercise, revealedInjects, steps, decisionStatuses, decisionResponses, {}, completedSteps, sessionNotes, actionItems);
     saveCompletedSession(scorecard);
     setCompletedSession(scorecard);
     setExportNotice("Exercise ended. Scorecard saved in this browser.");
@@ -500,9 +527,12 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
                 <DecisionSlide
                   activeDecision={activeDecision}
                   activeDecisionIndex={activeDecisionIndex}
+                  decisions={activeStep.decisions}
                   total={activeStep.decisions.length}
                   isDecided={decisionStatuses[decisionKey(activeStep.title, activeDecision)] === true}
                   facilitatorHint={facilitatorHint}
+                  selectedDecision={decisionResponses[activeStep.title] ?? ""}
+                  onSelect={chooseDecision}
                   onToggle={(checked) => toggleDecision(activeDecision, checked)}
                   onPrevious={() => moveDecision(-1)}
                   onNext={() => moveDecision(1)}
@@ -542,8 +572,8 @@ export function FacilitatorSession({ exercise }: { exercise: GeneratedExercise }
                 Previous Slide
               </Button>
               {activeFocusIndex < focusStages.length - 1 ? (
-                <Button onClick={() => moveFocus(1)}>
-                  Next Slide: {nextFocusLabel}
+                <Button onClick={() => moveFocus(1)} disabled={needsDecisionResponse}>
+                  {needsDecisionResponse ? "Pick A Response To Continue" : `Next Slide: ${nextFocusLabel}`}
                   <ChevronRight className="size-4" suppressHydrationWarning />
                 </Button>
               ) : activeIndex === steps.length - 1 ? (
@@ -659,9 +689,12 @@ function BriefSlide({ activeStep, knownFacts }: { activeStep: FacilitatorStep; k
 function DecisionSlide({
   activeDecision,
   activeDecisionIndex,
+  decisions,
   total,
   isDecided,
   facilitatorHint,
+  selectedDecision,
+  onSelect,
   onToggle,
   onPrevious,
   onNext,
@@ -670,9 +703,12 @@ function DecisionSlide({
 }: {
   activeDecision: string;
   activeDecisionIndex: number;
+  decisions: string[];
   total: number;
   isDecided: boolean;
   facilitatorHint: string;
+  selectedDecision: string;
+  onSelect: (decision: string) => void;
   onToggle: (checked: boolean) => void;
   onPrevious: () => void;
   onNext: () => void;
@@ -682,25 +718,61 @@ function DecisionSlide({
   return (
     <div className="space-y-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <p className="text-sm text-muted-foreground">
-          Decision {Math.min(activeDecisionIndex + 1, total)} of {total}
-        </p>
+        <p className="text-sm text-muted-foreground">Pick one response path, or write your own.</p>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={onPrevious} disabled={activeDecisionIndex === 0}>
             <ChevronLeft className="size-4" suppressHydrationWarning />
-            Previous
+            Previous option
           </Button>
           <Button variant="outline" size="sm" onClick={onNext} disabled={activeDecisionIndex >= total - 1}>
-            Next decision
+            Next option
             <ChevronRight className="size-4" suppressHydrationWarning />
           </Button>
         </div>
       </div>
+
+      <div className="grid gap-3 lg:grid-cols-2">
+        {decisions.slice(0, 4).map((decision, index) => {
+          const optionLabel = String.fromCharCode(65 + index);
+          const isSelected = selectedDecision === decision;
+
+          return (
+            <button
+              key={`${optionLabel}-${decision}`}
+              type="button"
+              className={`rounded-md border p-4 text-left transition ${
+                isSelected
+                  ? "border-primary bg-primary/15 text-foreground"
+                  : "border-border bg-background/55 text-muted-foreground hover:border-primary/45 hover:bg-primary/5"
+              }`}
+              onClick={() => onSelect(decision)}
+            >
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <Badge variant={isSelected ? "secondary" : "outline"}>{optionLabel}</Badge>
+                {isSelected ? <CheckCircle2 className="size-4 text-primary" suppressHydrationWarning /> : null}
+              </div>
+              <p className="text-base font-medium leading-7">{decision}</p>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="space-y-2 rounded-md border border-border bg-background/55 p-4">
+        <p className="text-sm font-medium">Write your own response</p>
+        <Textarea
+          value={selectedDecision.startsWith("Custom response: ") ? selectedDecision.replace("Custom response: ", "") : ""}
+          onChange={(event) => onSelect(event.target.value.trim() ? `Custom response: ${event.target.value}` : "")}
+          placeholder="Example: Escalate to leadership, isolate only the affected file server, and call the cyber insurer before external communications."
+          className="min-h-[96px]"
+        />
+      </div>
+
       <div className="flex gap-4 rounded-md border border-primary/25 bg-primary/10 p-5">
-        <Checkbox checked={isDecided} onCheckedChange={(value) => onToggle(value === true)} className="mt-2" />
+        <Checkbox checked={Boolean(selectedDecision) || isDecided} onCheckedChange={(value) => onToggle(value === true)} className="mt-2" />
         <div className="space-y-3">
-          <ReadingText text={activeDecision} className="text-2xl leading-9 text-foreground" speed={34} />
-          <Badge variant={isDecided ? "secondary" : "outline"}>{isDecided ? "Decided" : "Needs an answer"}</Badge>
+          <p className="text-sm font-medium text-primary">Selected response</p>
+          <ReadingText text={selectedDecision || activeDecision} className="text-xl leading-8 text-foreground" speed={34} />
+          <Badge variant={selectedDecision || isDecided ? "secondary" : "outline"}>{selectedDecision || isDecided ? "Ready to evolve" : "Needs an answer"}</Badge>
         </div>
       </div>
       <div className="flex flex-wrap gap-2">
@@ -803,7 +875,7 @@ function buildSlideTitle(stageId: FocusStageId) {
     brief: "Set the scene",
     updates: "What changed?",
     facts: "Sort facts from unknowns",
-    decision: "Make one decision",
+    decision: "Choose a response path",
     question: "Discuss one question",
     capture: "Lock in the lesson",
   };
@@ -1186,6 +1258,7 @@ async function resolveInject({
   revealedInjects,
   sessionNotes,
   aiAccessCode,
+  selectedDecision,
   useAi,
   onNotice,
 }: {
@@ -1197,6 +1270,7 @@ async function resolveInject({
   revealedInjects: RevealedInject[];
   sessionNotes: string;
   aiAccessCode: string;
+  selectedDecision: string;
   useAi: boolean;
   onNotice: (notice: string) => void;
 }): Promise<Inject> {
@@ -1213,6 +1287,7 @@ async function resolveInject({
       revealedInjects,
       sessionNotes,
       aiAccessCode,
+      selectedDecision,
     });
 
     onNotice("AI generated this twist.");
@@ -1274,6 +1349,7 @@ async function requestAiInject({
   revealedInjects,
   sessionNotes,
   aiAccessCode,
+  selectedDecision,
 }: {
   exercise: GeneratedExercise;
   activeStep: FacilitatorStep;
@@ -1282,6 +1358,7 @@ async function requestAiInject({
   revealedInjects: RevealedInject[];
   sessionNotes: string;
   aiAccessCode: string;
+  selectedDecision: string;
 }): Promise<AiInjectResponse["inject"]> {
   const sessionToken = getStoredSessionToken();
   const headers = new Headers();
@@ -1321,6 +1398,7 @@ async function requestAiInject({
         knownFacts,
         unknowns,
         decisions: activeStep.decisions,
+        selectedDecision,
       },
       previousInjects: revealedInjects.map((inject) => inject.text),
       sessionNotes,
@@ -1437,6 +1515,10 @@ function buildAiExerciseContext(exercise: GeneratedExercise) {
     summary: exercise.scenarioSummary,
     objectives: exercise.objectives,
   };
+}
+
+function buildSessionNotesWithDecision(sessionNotes: string, selectedDecision?: string) {
+  return [sessionNotes, selectedDecision ? `Selected response path: ${selectedDecision}` : ""].filter(Boolean).join("\n\n");
 }
 
 function formatAssistantResponse(response: AiAssistResponse) {
@@ -2340,6 +2422,7 @@ function buildSessionSummary(
   revealedInjects: RevealedInject[],
   steps: FacilitatorStep[],
   decisionStatuses: Record<string, boolean>,
+  decisionResponses: Record<string, string>,
   stepNotes: Record<string, string>,
   completedSteps: Record<string, boolean>,
   sessionNotes: string,
@@ -2366,6 +2449,9 @@ function buildSessionSummary(
   steps.forEach((step) => {
     lines.push(`#### ${step.title}`);
     lines.push(`- Discussion complete: ${completedSteps[step.title] ? "Yes" : "No"}`);
+    if (decisionResponses[step.title]) {
+      lines.push(`- Selected response path: ${decisionResponses[step.title]}`);
+    }
     step.decisions.forEach((decision) => {
       lines.push(`- [${decisionStatuses[decisionKey(step.title, decision)] ? "x" : " "}] ${decision}`);
     });
@@ -2392,18 +2478,24 @@ function buildCompletedSession(
   revealedInjects: RevealedInject[],
   steps: FacilitatorStep[],
   decisionStatuses: Record<string, boolean>,
+  decisionResponses: Record<string, string>,
   stepNotes: Record<string, string>,
   completedSteps: Record<string, boolean>,
   sessionNotes: string,
   actionItems: string,
 ): CompletedSession {
-  const decisions = steps.flatMap((step) =>
-    step.decisions.map((decision) => ({
+  const decisions = steps.flatMap((step) => {
+    const baseDecisions = step.decisions.map((decision) => ({
       stepTitle: step.title,
       decision,
-      decided: decisionStatuses[decisionKey(step.title, decision)] === true,
-    })),
-  );
+      decided: decisionStatuses[decisionKey(step.title, decision)] === true || decisionResponses[step.title] === decision,
+    }));
+    const customDecision = decisionResponses[step.title] && !step.decisions.includes(decisionResponses[step.title])
+      ? [{ stepTitle: step.title, decision: decisionResponses[step.title], decided: true }]
+      : [];
+
+    return [...baseDecisions, ...customDecision];
+  });
   const completedInjects = revealedInjects.map((inject) => ({ stepTitle: inject.stepTitle, text: inject.text }));
   const unresolvedUnknowns = buildUnresolvedUnknowns(steps, revealedInjects, decisionStatuses);
   const categoryScores = buildCategoryScores(exercise, steps, decisions, revealedInjects, sessionNotes, actionItems);
@@ -2424,6 +2516,7 @@ function buildCompletedSession(
     scenario: exercise.overview.scenario,
     maturityLevel: exercise.overview.maturityLevel,
     hasIrpAnalysis: Boolean(exercise.irpAnalysis),
+    needsStarterIrp: Boolean(exercise.starterIrpTemplate),
     irpFindings:
       exercise.irpAnalysis?.findings.map((finding) => ({
         id: finding.id,
@@ -2460,6 +2553,7 @@ function buildCompletedSession(
     improvementPlan,
     unresolvedUnknowns,
     recommendedNextTabletop,
+    starterIrpTemplate: exercise.starterIrpTemplate,
     decisions,
     revealedInjects: completedInjects,
     completedSteps: completedStepTitles,
@@ -2539,6 +2633,15 @@ function scoreRecovery(decisions: CompletedSessionDecision[], actionItems: strin
 }
 
 function scoreIrpCoverage(exercise: GeneratedExercise): SessionScoreCategory {
+  if (exercise.starterIrpTemplate) {
+    return {
+      id: "irpCoverage",
+      label: "IRP Coverage",
+      score: 25,
+      summary: "No IRP was available, so the exercise produced a starter IRP outline and plan inputs to complete.",
+    };
+  }
+
   if (!exercise.irpAnalysis) {
     return {
       id: "irpCoverage",
@@ -2697,6 +2800,10 @@ function buildImprovementPlan(categoryScores: SessionScoreCategory[], unresolved
 }
 
 function buildRecommendedNextTabletop(exercise: GeneratedExercise, categoryScores: SessionScoreCategory[]) {
+  if (exercise.starterIrpTemplate) {
+    return "Complete the starter IRP template from this exercise, review it with leadership and legal/compliance, then rerun the same scenario to validate the new plan.";
+  }
+
   const weakest = categoryScores
     .filter((category) => category.score !== null)
     .sort((first, second) => (first.score ?? 0) - (second.score ?? 0))[0];
@@ -2740,6 +2847,7 @@ function buildCompletedSessionMarkdown(exercise: GeneratedExercise, session: Com
       session.revealedInjects.map((inject) => ({ ...inject, id: inject.text, fact: inject.text, unknown: "", stepTitle: inject.stepTitle })),
       buildFacilitatorSteps(exercise),
       Object.fromEntries(session.decisions.map((decision) => [decisionKey(decision.stepTitle, decision.decision), decision.decided])),
+      Object.fromEntries(session.decisions.filter((decision) => decision.decided).map((decision) => [decision.stepTitle, decision.decision])),
       session.stepNotes,
       Object.fromEntries(session.completedSteps.map((stepTitle) => [stepTitle, true])),
       session.sessionNotes,
@@ -2775,12 +2883,46 @@ function buildCompletedSessionMarkdown(exercise: GeneratedExercise, session: Com
     "### Recommended Next Tabletop",
     session.recommendedNextTabletop,
     "",
+    ...(exercise.starterIrpTemplate ? buildStarterIrpSessionMarkdown(exercise).split("\n") : []),
     "### AI Context",
     "```json",
     JSON.stringify(session.aiContext, null, 2),
     "```",
     "",
   ];
+
+  return lines.join("\n");
+}
+
+function buildStarterIrpSessionMarkdown(exercise: GeneratedExercise) {
+  const template = exercise.starterIrpTemplate;
+  if (!template) {
+    return "";
+  }
+
+  const lines = [
+    "## Starter IRP Draft",
+    template.generatedBecause,
+    "",
+  ];
+
+  template.sections.forEach((section) => {
+    lines.push(`### ${section.title}`);
+    lines.push(`Purpose: ${section.purpose}`);
+    lines.push("");
+    lines.push(section.draftText);
+    lines.push("");
+    lines.push("Fill in:");
+    section.fillIn.forEach((item) => lines.push(`- ${item}`));
+    lines.push("");
+  });
+
+  lines.push("### Missing Inputs To Collect");
+  template.missingInputs.forEach((item) => lines.push(`- ${item}`));
+  lines.push("");
+  lines.push("### Next Steps");
+  template.nextSteps.forEach((item) => lines.push(`- ${item}`));
+  lines.push("");
 
   return lines.join("\n");
 }

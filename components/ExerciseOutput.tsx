@@ -114,6 +114,7 @@ export function ExerciseOutput({
             <ListSection title="Exercise Objectives" items={exercise.objectives} />
             <ListSection title="Suggested Participants" items={exercise.suggestedParticipants} badge />
             {exercise.irpAnalysis ? <IrpAnalysisSection exercise={exercise} /> : null}
+            {exercise.starterIrpTemplate ? <StarterIrpTemplateSection exercise={exercise} /> : null}
             <ListSection title="Expected Decisions" items={exercise.expectedDecisions} />
             <ListSection title="Facilitator Notes" items={exercise.facilitatorNotes} />
 
@@ -218,6 +219,39 @@ function IrpAnalysisSection({ exercise }: { exercise: GeneratedExercise }) {
             </div>
           )}
         </div>
+      </div>
+    </Section>
+  );
+}
+
+function StarterIrpTemplateSection({ exercise }: { exercise: GeneratedExercise }) {
+  if (!exercise.starterIrpTemplate) {
+    return null;
+  }
+
+  return (
+    <Section title="Starter IRP Template">
+      <div className="space-y-4">
+        <div className="rounded-md border border-accent/35 bg-accent/10 p-4">
+          <p className="text-sm leading-6 text-muted-foreground">{exercise.starterIrpTemplate.generatedBecause}</p>
+        </div>
+        <div className="grid gap-3">
+          {exercise.starterIrpTemplate.sections.map((section) => (
+            <div key={section.title} className="rounded-md border border-border bg-background/45 p-4">
+              <p className="font-medium">{section.title}</p>
+              <p className="mt-1 text-sm leading-6 text-muted-foreground">{section.purpose}</p>
+              <p className="mt-3 text-sm leading-6 text-foreground">{section.draftText}</p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {section.fillIn.map((item) => (
+                  <Badge key={item} variant="outline">
+                    {item}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+        <ListSection title="Starter IRP Missing Inputs" items={exercise.starterIrpTemplate.missingInputs} />
       </div>
     </Section>
   );

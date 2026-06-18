@@ -847,6 +847,7 @@ const tabletopExerciseSchema = {
     "facilitatorNotes",
     "executiveSummary",
     "irpAnalysis",
+    "starterIrpTemplate",
     "lessonsLearnedTemplate",
   ],
   properties: {
@@ -885,6 +886,30 @@ const tabletopExerciseSchema = {
             },
           },
         },
+      },
+    },
+    starterIrpTemplate: {
+      type: "object",
+      additionalProperties: false,
+      required: ["generatedBecause", "sections", "missingInputs", "nextSteps"],
+      properties: {
+        generatedBecause: { type: "string" },
+        sections: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["title", "purpose", "draftText", "fillIn"],
+            properties: {
+              title: { type: "string" },
+              purpose: { type: "string" },
+              draftText: { type: "string" },
+              fillIn: { type: "array", items: { type: "string" } },
+            },
+          },
+        },
+        missingInputs: { type: "array", items: { type: "string" } },
+        nextSteps: { type: "array", items: { type: "string" } },
       },
     },
     lessonsLearnedTemplate: {
@@ -1858,6 +1883,7 @@ function sanitizeAiGenerationOptions(value) {
     includeLessonsLearned: value.includeLessonsLearned !== false,
     hasHumanFacilitator: false,
     customScenarioDetails: asLimitedString(value.customScenarioDetails, 2500),
+    noIrp: value.noIrp === true,
     irpText: asLimitedString(value.irpText, 40_000),
     irpFileName: asLimitedString(value.irpFileName, 200),
   };
@@ -1870,6 +1896,9 @@ function buildTabletopGenerationPrompt(options) {
       "Make this unique to the exact organization context, scenario type, industry, organization size, maturity level, duration, optional details, and IRP text.",
       "Do not use generic hard-coded questions when a more specific question can be generated from the provided context.",
       "If IRP text is provided, identify strengths and gaps from the IRP and tailor questions, expected decisions, and scenario pressure toward those gaps.",
+      "If noIrp is true, do not pretend an IRP exists. Build the exercise to help the user draft a starter incident response plan from decisions made during the tabletop.",
+      "If noIrp is true, starterIrpTemplate must include practical draft sections for purpose/scope, roles/contact tree, severity/escalation, reporting, evidence preservation, containment/recovery, communications, and post-incident review.",
+      "If noIrp is false, starterIrpTemplate should still be present but may contain empty arrays and a short generatedBecause note.",
       "Do not store, quote, or reproduce long raw IRP passages. Summarize plan coverage and use short evidence keywords only.",
       "For Basic maturity, write for non-technical participants with plain language, clear ownership, and handholding.",
       "For Intermediate maturity, mix business impact, ownership, escalation, containment, and moderate technical detail.",
@@ -1902,6 +1931,7 @@ function buildTabletopGenerationPrompt(options) {
       includeComplianceQuestions: options.includeComplianceQuestions,
       includeLessonsLearned: options.includeLessonsLearned,
       customScenarioDetails: options.customScenarioDetails,
+      noIrp: options.noIrp,
       irpFileName: options.irpFileName,
       irpText: options.irpText,
     },
@@ -1921,6 +1951,7 @@ function buildPromptPayload(body) {
       "Keep injectText to 2 or 3 sentences, 75 words maximum, and one clear new development.",
       "Do not include analysis, multiple branches, long evidence lists, or the full answer inside injectText.",
       "Put the next discussion prompt in followUpQuestion and the decision in expectedDecision instead of stuffing them into injectText.",
+      "If currentStep.selectedDecision is provided, evolve the scenario as a consequence of that response path. Make the consequence realistic and educational, not punitive for every choice.",
       "If industry is MSP / IT Provider, the organization is the provider serving client companies. Do not say they contact an external MSP, partner MSP, or their MSP. Realistic parties are affected clients, client account owners, upstream software vendors, RMM/PSA vendors, cloud providers, legal, insurer, and internal service desk/escalation leads.",
       "Do not repeat prior injects.",
       "Do not provide malware, exploit, credential theft, evasion, or persistence instructions.",
@@ -1943,6 +1974,7 @@ function buildPromptPayload(body) {
       knownFacts: asStringArray(body.currentStep.knownFacts, 12),
       unknowns: asStringArray(body.currentStep.unknowns, 12),
       decisions: asStringArray(body.currentStep.decisions, 12),
+      selectedDecision: asLimitedString(body.currentStep.selectedDecision, 600),
     },
     previousInjects: asStringArray(body.previousInjects, 12),
     sessionNotes: asLimitedString(body.sessionNotes, 2000),
@@ -2115,6 +2147,7 @@ function parseAiGeneratedExercise(value, options, generatedAt) {
     expectedDecisions: asStringArray(parsed.expectedDecisions, 20),
     facilitatorNotes: asStringArray(parsed.facilitatorNotes, 14),
     irpAnalysis: normalizeAiIrpAnalysis(parsed.irpAnalysis, options, generatedAt),
+    starterIrpTemplate: normalizeStarterIrpTemplate(parsed.starterIrpTemplate, options),
     lessonsLearnedTemplate: normalizeLessonsLearnedTemplate(parsed.lessonsLearnedTemplate, options.includeLessonsLearned),
     executiveSummary: asLimitedString(parsed.executiveSummary, 3000),
     markdownReport: "",
@@ -2140,6 +2173,10 @@ function parseAiGeneratedExercise(value, options, generatedAt) {
 }
 
 function normalizeAiIrpAnalysis(value, options, generatedAt) {
+  if (options.noIrp) {
+    return undefined;
+  }
+
   const hasIrp = Boolean(options.irpText?.trim());
   if (!value || typeof value !== "object") {
     if (!hasIrp) {
@@ -2181,6 +2218,101 @@ function normalizeAiIrpAnalysis(value, options, generatedAt) {
       (hasIrp ? "The AI reviewed the provided IRP text for exercise-relevant gaps." : "No IRP was uploaded."),
     strengths: asStringArray(value.strengths, 8),
     findings,
+  };
+}
+
+function normalizeStarterIrpTemplate(value, options) {
+  if (!options.noIrp) {
+    const sections = Array.isArray(value?.sections) ? value.sections : [];
+    if (sections.length === 0) {
+      return undefined;
+    }
+  }
+
+  const fallback = buildStarterIrpTemplate(options);
+  const sections = Array.isArray(value?.sections)
+    ? value.sections.slice(0, 10).map((section) => ({
+        title: asLimitedString(section?.title, 120),
+        purpose: asLimitedString(section?.purpose, 300),
+        draftText: asLimitedString(section?.draftText, 1200),
+        fillIn: asStringArray(section?.fillIn, 8),
+      })).filter((section) => section.title && section.draftText)
+    : [];
+
+  return {
+    generatedBecause:
+      asLimitedString(value?.generatedBecause, 600) ||
+      fallback.generatedBecause,
+    sections: sections.length > 0 ? sections : fallback.sections,
+    missingInputs: asStringArray(value?.missingInputs, 12).length > 0 ? asStringArray(value?.missingInputs, 12) : fallback.missingInputs,
+    nextSteps: asStringArray(value?.nextSteps, 8).length > 0 ? asStringArray(value?.nextSteps, 8) : fallback.nextSteps,
+  };
+}
+
+function buildStarterIrpTemplate(options) {
+  const organization = options.organizationName;
+  const scenario = String(options.scenarioType || "cybersecurity incident").toLowerCase();
+  const industry = String(options.industry || "organization").toLowerCase();
+
+  return {
+    generatedBecause: "No incident response plan was uploaded. This starter outline should be completed and reviewed after the tabletop; it is not a substitute for legal, regulatory, or security review.",
+    sections: [
+      {
+        title: "Purpose and Scope",
+        purpose: "Define what the plan covers and when it applies.",
+        draftText: `${organization} will use this incident response plan to prepare for, detect, coordinate, contain, recover from, and learn from cybersecurity incidents affecting its people, systems, data, clients, vendors, or operations.`,
+        fillIn: ["Covered systems, locations, data, and business processes", `Industry-specific obligations for a ${industry} organization`, "Plan owner and review cadence"],
+      },
+      {
+        title: "Incident Roles and Contact Tree",
+        purpose: "Make ownership obvious before pressure starts.",
+        draftText: "The organization should name a primary incident coordinator, backup coordinator, technical lead, business owner, communications owner, executive approver, legal/compliance contact, and outside support contacts.",
+        fillIn: ["Primary and backup names with phone/email", "Vendor, insurer, legal, law enforcement, and regulator contacts", "After-hours approval path"],
+      },
+      {
+        title: "Severity Levels and Escalation",
+        purpose: "Help the team decide when an event becomes a formal incident.",
+        draftText: "Incidents should be classified by operational impact, data sensitivity, number of affected users or clients, legal/compliance exposure, financial impact, and public/customer visibility.",
+        fillIn: ["Low, medium, high, and critical definitions", "Who can declare each level", "What each level activates"],
+      },
+      {
+        title: "Detection, Reporting, and First 30 Minutes",
+        purpose: "Give staff a simple path to report concerns.",
+        draftText: `For a suspected ${scenario} event, staff should report what they saw, when it happened, who is affected, screenshots or message details if safe, and any business impact. The team should avoid deleting evidence or taking unapproved disruptive action.`,
+        fillIn: ["Report intake channel", "Minimum facts to collect", "What staff should not do"],
+      },
+      {
+        title: "Evidence Preservation",
+        purpose: "Balance fast containment with preserving facts needed later.",
+        draftText: "The response team should document timeline, affected accounts/systems, logs reviewed, screenshots, communications, actions taken, approvals, and custody of exported evidence.",
+        fillIn: ["Log sources and retention periods", "Who may collect/export evidence", "Where evidence is stored"],
+      },
+      {
+        title: "Containment, Recovery, and Communications",
+        purpose: "Define who can act and who must approve messaging.",
+        draftText: "Containment and recovery actions should be approved based on severity, business impact, evidence risk, and legal/compliance needs. Communications should separate confirmed facts from assumptions.",
+        fillIn: ["Containment actions allowed without approval", "Recovery validation steps", "Internal, customer/client, regulator, media, and leadership update owners"],
+      },
+      {
+        title: "Post-Incident Review and Improvement",
+        purpose: "Turn lessons learned into plan updates.",
+        draftText: "After each incident or tabletop, the organization should document what happened, what decisions were made, what was unclear, what slowed response, and which plan updates are needed.",
+        fillIn: ["After-action meeting owner", "Action item tracker", "Retest schedule"],
+      },
+    ],
+    missingInputs: [
+      "Named incident coordinator and backup",
+      "Severity definitions and declaration authority",
+      "Vendor, legal, insurer, regulator, and leadership contact list",
+      "Evidence locations and retention expectations",
+      "Communication approval path",
+      "Recovery validation steps",
+    ],
+    nextSteps: [
+      "Use the tabletop notes to fill the starter IRP sections.",
+      "Have leadership, legal/compliance, IT/security, and business owners review the draft.",
+      "Run a shorter follow-up tabletop against the completed draft within 30 to 90 days.",
+    ],
   };
 }
 
@@ -2228,6 +2360,7 @@ function buildGeneratedExerciseMarkdown(exercise) {
     markdownList("Exercise Objectives", exercise.objectives),
     markdownList("Suggested Participants", exercise.suggestedParticipants),
     exercise.irpAnalysis ? buildIrpMarkdown(exercise.irpAnalysis) : "",
+    exercise.starterIrpTemplate ? buildStarterIrpMarkdown(exercise.starterIrpTemplate) : "",
     markdownList("Discussion Questions", exercise.discussionQuestions),
     markdownList("IRP Gap Discovery Questions", exercise.gapDiscoveryQuestions),
     markdownList("Expected Decisions", exercise.expectedDecisions),
@@ -2268,6 +2401,34 @@ function buildIrpMarkdown(analysis) {
         ]
       : []),
   ].join("\n");
+}
+
+function buildStarterIrpMarkdown(template) {
+  const lines = [
+    "## Starter IRP Template",
+    template.generatedBecause,
+    "",
+  ];
+
+  (template.sections ?? []).forEach((section) => {
+    lines.push(`### ${section.title}`);
+    lines.push(`Purpose: ${section.purpose}`);
+    lines.push("");
+    lines.push(section.draftText);
+    lines.push("");
+    lines.push("Fill in:");
+    (section.fillIn ?? []).forEach((item) => lines.push(`- ${item}`));
+    lines.push("");
+  });
+
+  lines.push("### Missing Inputs To Collect");
+  (template.missingInputs ?? []).forEach((item) => lines.push(`- ${item}`));
+  lines.push("");
+  lines.push("### Next Steps");
+  (template.nextSteps ?? []).forEach((item) => lines.push(`- ${item}`));
+  lines.push("");
+
+  return lines.join("\n");
 }
 
 function countWords(value) {
