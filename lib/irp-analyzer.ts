@@ -140,11 +140,27 @@ const gapRules: GapRule[] = [
   },
 ];
 
-export function analyzeIrp(text: string, sourceName?: string): IrpAnalysis | undefined {
+const rolePatterns: Array<{ label: string; patterns: RegExp[] }> = [
+  { label: "Incident Commander", patterns: [/\bincident commander\b/, /\bincident lead\b/, /\bincident coordinator\b/] },
+  { label: "IT Lead", patterns: [/\bit lead\b/, /\bit manager\b/, /\btechnology lead\b/, /\bsystems administrator\b/, /\bsysadmin\b/] },
+  { label: "Security Lead", patterns: [/\bsecurity lead\b/, /\bsecurity officer\b/, /\bciso\b/, /\binformation security\b/, /\bcybersecurity lead\b/] },
+  { label: "Executive Sponsor", patterns: [/\bexecutive sponsor\b/, /\bceo\b/, /\bchief executive officer\b/, /\bexecutive director\b/, /\btown administrator\b/] },
+  { label: "Finance Lead", patterns: [/\bcfo\b/, /\bchief financial officer\b/, /\bfinance director\b/, /\bfinance lead\b/, /\bcontroller\b/, /\bpayment approver\b/] },
+  { label: "Legal Counsel", patterns: [/\blegal counsel\b/, /\bgeneral counsel\b/, /\battorney\b/, /\boutside counsel\b/, /\blegal\b/] },
+  { label: "Compliance Lead", patterns: [/\bcompliance officer\b/, /\bcompliance lead\b/, /\bprivacy officer\b/, /\bhipaa officer\b/, /\bdata protection officer\b/] },
+  { label: "Communications Lead", patterns: [/\bcommunications lead\b/, /\bpublic information officer\b/, /\bpio\b/, /\bpublic relations\b/, /\bspokesperson\b/] },
+  { label: "HR Lead", patterns: [/\bhr lead\b/, /\bhuman resources\b/, /\bhr manager\b/] },
+  { label: "Operations Lead", patterns: [/\boperations lead\b/, /\boperations manager\b/, /\bbusiness owner\b/, /\bdepartment manager\b/] },
+  { label: "Vendor Owner", patterns: [/\bvendor owner\b/, /\bvendor manager\b/, /\bprocurement\b/, /\bthird-party risk\b/, /\bservice owner\b/] },
+  { label: "Cyber Insurance Contact", patterns: [/\bcyber insurance\b/, /\binsurance contact\b/, /\bbreach coach\b/] },
+];
+
+export function analyzeIrp(text: string, sourceName?: string, suppliedStructure?: string): IrpAnalysis | undefined {
   const normalized = normalizeText(text);
   const words = normalized.match(/[a-z0-9]+/g) ?? [];
+  const suppliedRoles = extractRolesFromText(suppliedStructure ?? "");
 
-  if (words.length < 25) {
+  if (words.length < 25 && suppliedRoles.length === 0) {
     return undefined;
   }
 
@@ -154,6 +170,8 @@ export function analyzeIrp(text: string, sourceName?: string): IrpAnalysis | und
     .filter((finding) => finding.status === "found")
     .slice(0, 4)
     .map((finding) => finding.label);
+  const detectedRoles = extractRolesFromText(text);
+  const organizationStructure = buildOrganizationStructure(detectedRoles, suppliedRoles);
 
   return {
     sourceName,
@@ -161,10 +179,11 @@ export function analyzeIrp(text: string, sourceName?: string): IrpAnalysis | und
     wordCount: words.length,
     overallSummary:
       gaps.length > 0
-        ? `The IRP scan found ${gaps.length} likely weak or missing areas. The generated tabletop questions were adjusted to focus on those gaps.`
-        : "The IRP scan found coverage across the major incident response areas. The exercise still includes validation questions to confirm the plan works in practice.",
+        ? `The IRP scan found ${gaps.length} likely weak or missing areas. The generated tabletop questions were adjusted to focus on those gaps.${organizationStructure ? ` Detected structure: ${organizationStructure.detectedRoles.join(", ")}.` : ""}`
+        : `The IRP scan found coverage across the major incident response areas. The exercise still includes validation questions to confirm the plan works in practice.${organizationStructure ? ` Detected structure: ${organizationStructure.detectedRoles.join(", ")}.` : ""}`,
     strengths,
     findings,
+    organizationStructure,
   };
 }
 
@@ -239,4 +258,51 @@ function normalizeText(text: string) {
     .replace(/[^\w\s/-]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function extractRolesFromText(text: string) {
+  const normalized = normalizeText(text);
+  const roles = rolePatterns
+    .filter((role) => role.patterns.some((pattern) => pattern.test(normalized)))
+    .map((role) => role.label);
+
+  const lineRoles = text
+    .split(/\r?\n|,|;/)
+    .map((item) => item.trim())
+    .filter((item) => item.length >= 3 && item.length <= 70)
+    .filter((item) => /\b(lead|manager|director|owner|officer|counsel|commander|coordinator|administrator|admin|approver|contact)\b/i.test(item))
+    .map((item) => item.replace(/^[-*]\s*/, ""))
+    .slice(0, 12);
+
+  return uniqueStrings([...roles, ...lineRoles]).slice(0, 14);
+}
+
+function buildOrganizationStructure(detectedRoles: string[], suppliedRoles: string[]) {
+  const roles = uniqueStrings(suppliedRoles.length > 0 ? suppliedRoles : detectedRoles).slice(0, 14);
+  if (roles.length === 0) {
+    return undefined;
+  }
+
+  const source = suppliedRoles.length > 0 ? "user supplied" : "uploaded IRP";
+  return {
+    source,
+    detectedRoles: roles,
+    guidance:
+      source === "uploaded IRP"
+        ? "Use only these detected IRP roles when naming participants or decision owners. If a common role is not listed, describe the gap instead of inventing that role."
+        : "Use this supplied structure as the participant and decision-owner pool because no IRP was uploaded.",
+  } as const;
+}
+
+function uniqueStrings(items: string[]) {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const normalized = item.trim().replace(/\s+/g, " ");
+    const key = normalized.toLowerCase();
+    if (!normalized || seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 }

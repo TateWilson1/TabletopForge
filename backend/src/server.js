@@ -1954,6 +1954,7 @@ function sanitizeAiGenerationOptions(value) {
     includeLessonsLearned: value.includeLessonsLearned !== false,
     hasHumanFacilitator: false,
     customScenarioDetails: asLimitedString(value.customScenarioDetails, 2500),
+    organizationStructure: asLimitedString(value.organizationStructure, 2500),
     noIrp: value.noIrp === true,
     irpText: asLimitedString(value.irpText, 40_000),
     irpFileName: asLimitedString(value.irpFileName, 200),
@@ -1967,7 +1968,10 @@ function buildTabletopGenerationPrompt(options) {
       "Make this unique to the exact organization context, scenario type, industry, organization size, maturity level, duration, optional details, and IRP text.",
       "Do not use generic hard-coded questions when a more specific question can be generated from the provided context.",
       "If IRP text is provided, identify strengths and gaps from the IRP and tailor questions, expected decisions, and scenario pressure toward those gaps.",
+      "If IRP text includes a role/contact/command structure, use that structure. Do not invent role titles that are not listed in the IRP. If a role seems needed but is absent, call it out as a gap or ask who owns it.",
+      "If a CFO, legal counsel, HR, communications, compliance, or other common role is not present in the IRP or supplied organizationStructure, do not name that role as a participant or decision owner.",
       "If noIrp is true, do not pretend an IRP exists. Build the exercise to help the user draft a starter incident response plan from decisions made during the tabletop.",
+      "If noIrp is true and organizationStructure is provided, use only those supplied roles/teams when naming participants and owners.",
       "If noIrp is true, starterIrpTemplate must include practical draft sections for purpose/scope, roles/contact tree, severity/escalation, reporting, evidence preservation, containment/recovery, communications, and post-incident review.",
       "If noIrp is false, starterIrpTemplate should still be present but may contain empty arrays and a short generatedBecause note.",
       "Do not store, quote, or reproduce long raw IRP passages. Summarize plan coverage and use short evidence keywords only.",
@@ -2002,6 +2006,7 @@ function buildTabletopGenerationPrompt(options) {
       includeComplianceQuestions: options.includeComplianceQuestions,
       includeLessonsLearned: options.includeLessonsLearned,
       customScenarioDetails: options.customScenarioDetails,
+      organizationStructure: options.organizationStructure,
       noIrp: options.noIrp,
       irpFileName: options.irpFileName,
       irpText: options.irpText,
@@ -2107,6 +2112,14 @@ function buildAssistIrpContext(irpAnalysis) {
           improvement: asLimitedString(finding?.improvement, 800),
         }))
       : [],
+    organizationStructure:
+      irpAnalysis.organizationStructure && typeof irpAnalysis.organizationStructure === "object"
+        ? {
+            source: asShortString(irpAnalysis.organizationStructure.source),
+            detectedRoles: asStringArray(irpAnalysis.organizationStructure.detectedRoles, 14),
+            guidance: asLimitedString(irpAnalysis.organizationStructure.guidance, 500),
+          }
+        : null,
   };
 }
 
@@ -2196,6 +2209,7 @@ function parseAssist(value) {
 
 function parseAiGeneratedExercise(value, options, generatedAt) {
   const parsed = JSON.parse(value);
+  const suppliedStructureRoles = extractStructureRoles(options.organizationStructure || options.irpText);
   const exercise = {
     id: crypto.randomUUID(),
     generatedAt,
@@ -2212,7 +2226,7 @@ function parseAiGeneratedExercise(value, options, generatedAt) {
     scenarioSummary: asLimitedString(parsed.scenarioSummary, 5000),
     customScenarioDetails: options.customScenarioDetails || undefined,
     objectives: asStringArray(parsed.objectives, 10),
-    suggestedParticipants: asStringArray(parsed.suggestedParticipants, 18),
+    suggestedParticipants: suppliedStructureRoles.length > 0 ? suppliedStructureRoles : asStringArray(parsed.suggestedParticipants, 18),
     discussionQuestions: asStringArray(parsed.discussionQuestions, 24),
     gapDiscoveryQuestions: asStringArray(parsed.gapDiscoveryQuestions, 20),
     expectedDecisions: asStringArray(parsed.expectedDecisions, 20),
@@ -2241,6 +2255,41 @@ function parseAiGeneratedExercise(value, options, generatedAt) {
     ...exercise,
     markdownReport: buildGeneratedExerciseMarkdown(exercise),
   };
+}
+
+function extractStructureRoles(value) {
+  const source = String(value ?? "");
+  const normalized = source.toLowerCase();
+  const detected = [
+    [/\bincident commander\b|\bincident lead\b|\bincident coordinator\b/, "Incident Commander"],
+    [/\bit lead\b|\bit manager\b|\bsystems administrator\b|\bsysadmin\b/, "IT Lead"],
+    [/\bsecurity lead\b|\bsecurity officer\b|\bciso\b|\binformation security\b/, "Security Lead"],
+    [/\bexecutive sponsor\b|\bceo\b|\bexecutive director\b|\btown administrator\b/, "Executive Sponsor"],
+    [/\bcfo\b|\bchief financial officer\b|\bfinance director\b|\bcontroller\b|\bpayment approver\b/, "Finance Lead"],
+    [/\blegal counsel\b|\bgeneral counsel\b|\boutside counsel\b|\blegal\b/, "Legal Counsel"],
+    [/\bcompliance officer\b|\bprivacy officer\b|\bdata protection officer\b/, "Compliance Lead"],
+    [/\bcommunications lead\b|\bpublic information officer\b|\bpio\b|\bspokesperson\b/, "Communications Lead"],
+    [/\bhuman resources\b|\bhr manager\b|\bhr lead\b/, "HR Lead"],
+    [/\boperations lead\b|\boperations manager\b|\bbusiness owner\b|\bdepartment manager\b/, "Operations Lead"],
+    [/\bvendor owner\b|\bvendor manager\b|\bprocurement\b|\bthird-party risk\b/, "Vendor Owner"],
+    [/\bcyber insurance\b|\binsurance contact\b|\bbreach coach\b/, "Cyber Insurance Contact"],
+  ]
+    .filter(([pattern]) => pattern.test(normalized))
+    .map(([, label]) => label);
+
+  const freeTextRoles = source
+    .split(/\r?\n|,|;/)
+    .map((item) => item.trim())
+    .filter((item) => /\b(lead|manager|director|owner|officer|counsel|commander|coordinator|administrator|admin|approver|contact)\b/i.test(item));
+
+  return uniqueRoleStrings([...detected, ...freeTextRoles]);
+}
+
+function uniqueRoleStrings(items) {
+  return asStringArray(
+    items.filter((item, index, all) => all.findIndex((candidate) => candidate.toLowerCase() === item.toLowerCase()) === index),
+    14,
+  );
 }
 
 function normalizeAiIrpAnalysis(value, options, generatedAt) {

@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { CheckCircle2 } from "lucide-react";
-import { AccountPanel } from "@/components/AccountPanel";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
@@ -55,12 +54,12 @@ export default function PricingPage() {
         ))}
       </div>
 
-      <div className="mt-8 grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
+      <div className="mt-8">
         <Card className="bg-card/75">
           <CardHeader>
             <CardTitle>Ready To Generate?</CardTitle>
             <CardDescription>
-              Sign in on the account panel, then generate your first tabletop or choose a paid option.
+              Sign in on the account page, then generate your first tabletop or choose a paid option.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -74,7 +73,6 @@ export default function PricingPage() {
             </div>
           </CardContent>
         </Card>
-        <AccountPanel />
       </div>
     </main>
   );

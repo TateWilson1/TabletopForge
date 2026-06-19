@@ -51,6 +51,7 @@ export interface ExerciseOptions {
   includeLessonsLearned: boolean;
   hasHumanFacilitator: boolean;
   customScenarioDetails?: string;
+  organizationStructure?: string;
   noIrp?: boolean;
   irpText?: string;
   irpFileName?: string;
@@ -122,6 +123,11 @@ export interface IrpAnalysis {
   overallSummary: string;
   strengths: string[];
   findings: IrpGapFinding[];
+  organizationStructure?: {
+    source: "uploaded IRP" | "user supplied";
+    detectedRoles: string[];
+    guidance: string;
+  };
 }
 
 export interface SessionScoreCategory {

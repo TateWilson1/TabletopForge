@@ -202,7 +202,7 @@ const sizeProfiles: Record<ExerciseOptions["organizationSize"], ContextProfile> 
 
 export function generateExercise(options: ExerciseOptions): GeneratedExercise {
   const content = scenarioContent[options.scenarioType];
-  const irpAnalysis = analyzeIrp(options.irpText ?? "", options.irpFileName);
+  const irpAnalysis = analyzeIrp(options.irpText ?? "", options.irpFileName, options.noIrp ? options.organizationStructure : undefined);
   const tailoredIrpQuestions = getTailoredIrpQuestions(irpAnalysis);
   const industryProfile = industryProfiles[options.industry];
   const sizeProfile = sizeProfiles[options.organizationSize];
@@ -213,15 +213,19 @@ export function generateExercise(options: ExerciseOptions): GeneratedExercise {
   const contextualGapQuestions = buildContextualGapQuestions(options, irpAnalysis);
   const contextualDecisions = buildContextualDecisions(options, irpAnalysis);
   const starterIrpTemplate = options.noIrp ? buildStarterIrpTemplate(options, organization) : undefined;
-  const participants = uniqueStrings([...baseParticipants, ...industryProfile.participants, ...sizeProfile.participants]);
+  const structureRoles = irpAnalysis?.organizationStructure?.detectedRoles ?? [];
+  const participants = structureRoles.length > 0
+    ? uniqueStrings(structureRoles)
+    : uniqueStrings([...baseParticipants, ...industryProfile.participants, ...sizeProfile.participants]);
   const questionLimit = getQuestionLimit(options);
 
   if (options.scenarioType === "Vendor / Third-Party Breach") {
-    participants.push("Vendor/MSP Contact");
+    addIfAllowed(participants, "Vendor/MSP Contact", structureRoles);
   }
 
   if (options.industry === "MSP / IT Provider") {
-    participants.push("Affected Client Representative", "Upstream Software Vendor Contact");
+    addIfAllowed(participants, "Affected Client Representative", structureRoles);
+    addIfAllowed(participants, "Upstream Software Vendor Contact", structureRoles);
   }
 
   const discussionQuestions = buildQuestionSet(
@@ -275,6 +279,7 @@ export function generateExercise(options: ExerciseOptions): GeneratedExercise {
       sizeProfile.scenarioContext,
       buildMaturityContext(options.maturityLevel, irpAnalysis),
       buildIrpPressureContext(options, irpAnalysis),
+      buildStructureContext(options, irpAnalysis),
       options.noIrp ? "No IRP is currently available, so the exercise should capture decisions that can become a starter incident response plan." : "",
       customScenarioDetails ? `Additional exercise context: ${customScenarioDetails}` : "",
     ]
@@ -528,6 +533,20 @@ function buildIrpPressureContext(options: ExerciseOptions, analysis?: GeneratedE
   return `IRP context: the exercise should deliberately test weak or missing plan areas: ${selectedGaps.join(", ")}.`;
 }
 
+function buildStructureContext(options: ExerciseOptions, analysis?: GeneratedExercise["irpAnalysis"]) {
+  const structure = analysis?.organizationStructure;
+  if (!structure || structure.detectedRoles.length === 0) {
+    return "";
+  }
+
+  const roles = structure.detectedRoles.join(", ");
+  if (options.noIrp) {
+    return `Organization structure supplied by user: ${roles}. Use these roles for participants and decision owners. If a needed role is missing, ask who should own it instead of inventing a title.`;
+  }
+
+  return `IRP role structure detected: ${roles}. Use only those listed roles when naming participants or decision owners. If a common role such as CFO, legal, communications, or HR is not listed, call that out as a gap instead of adding the role.`;
+}
+
 function buildContextualObjectives(options: ExerciseOptions, analysis?: GeneratedExercise["irpAnalysis"]) {
   const objectives = [
     `Validate response decisions for a ${options.industry.toLowerCase()} organization with ${options.organizationSize} employees.`,
@@ -563,7 +582,9 @@ function buildContextualQuestions(options: ExerciseOptions, analysis?: Generated
 
   if (options.noIrp) {
     questions.unshift(
-      "If this happened today with no written IRP, who would coordinate the response first?",
+      analysis?.organizationStructure?.detectedRoles.length
+        ? `Using only the supplied structure (${analysis.organizationStructure.detectedRoles.join(", ")}), who would coordinate the response first?`
+        : "If this happened today with no written IRP, who would coordinate the response first?",
       "What facts would the team need before deciding whether this is a formal incident?",
       "Which contact names, backup contacts, vendors, legal/compliance contacts, and leadership approvals should be written into a starter IRP?",
     );
@@ -624,6 +645,12 @@ function buildContextualDecisions(options: ExerciseOptions, analysis?: Generated
   }
 
   return decisions;
+}
+
+function addIfAllowed(participants: string[], role: string, structureRoles: string[]) {
+  if (structureRoles.length === 0) {
+    participants.push(role);
+  }
 }
 
 function buildSizeQuestion(size: ExerciseOptions["organizationSize"]) {

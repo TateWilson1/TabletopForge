@@ -38,6 +38,7 @@ const defaultOptions: ExerciseOptions = {
   includeLessonsLearned: true,
   hasHumanFacilitator: false,
   customScenarioDetails: "",
+  organizationStructure: "",
   noIrp: false,
   irpText: "",
   irpFileName: "",
@@ -345,10 +346,22 @@ export function ExerciseForm() {
             </div>
 
             {options.noIrp ? (
-              <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-                <ShieldCheck className="size-4 text-accent" suppressHydrationWarning />
-                <span>No IRP mode enabled</span>
-                <span>Starter IRP template will be included in the report</span>
+              <div className="space-y-3 rounded-md border border-border bg-background/45 p-3">
+                <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+                  <ShieldCheck className="size-4 text-accent" suppressHydrationWarning />
+                  <span>No IRP mode enabled</span>
+                  <span>Starter IRP template will be included in the report</span>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="organizationStructure">Who would actually be involved?</Label>
+                  <Textarea
+                    id="organizationStructure"
+                    value={options.organizationStructure ?? ""}
+                    onChange={(event) => updateOption("organizationStructure", event.target.value)}
+                    placeholder="Example: owner, office manager, IT contractor, department lead, cyber insurer contact. Keep it simple."
+                    className="min-h-[88px]"
+                  />
+                </div>
               </div>
             ) : null}
 

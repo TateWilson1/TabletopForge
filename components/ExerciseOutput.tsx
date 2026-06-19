@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Download, FileText, Play, Save } from "lucide-react";
+import { Download, Play, Save, Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -25,10 +25,10 @@ export function ExerciseOutput({
     return (
       <Card className="flex min-h-[560px] items-center justify-center bg-card/55">
         <CardContent className="max-w-md p-8 text-center">
-          <FileText className="mx-auto mb-4 size-10 text-primary" suppressHydrationWarning />
+          <Sparkles className="mx-auto mb-4 size-10 text-primary" suppressHydrationWarning />
           <h2 className="text-xl font-semibold">{emptyTitle ?? "No exercise selected"}</h2>
           <p className="mt-3 text-sm leading-6 text-muted-foreground">
-            Generated tabletop packages include an overview, scenario summary, objectives, participants, discussion prompts, IRP gap questions, decisions, facilitator notes, and exportable Markdown.
+            Your generated mission brief will land here: scenario, players, pressure points, and the first path into the live session.
           </p>
         </CardContent>
       </Card>
@@ -86,13 +86,43 @@ export function ExerciseOutput({
         {copyNotice ? <p className="text-sm text-primary">{copyNotice}</p> : null}
       </CardHeader>
       <CardContent>
-        <Tabs defaultValue="report">
+        <div className="mb-6 rounded-lg border border-primary/35 bg-primary/10 p-5">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <div className="mb-3 flex flex-wrap gap-2">
+                <Badge variant="secondary">Mission Brief</Badge>
+                <Badge variant="outline">{exercise.overview.scenario}</Badge>
+                <Badge variant="outline">{exercise.overview.maturityLevel}</Badge>
+              </div>
+              <p className="text-xl font-semibold leading-8 text-foreground">{exercise.scenarioSummary}</p>
+            </div>
+            <Button asChild className="shrink-0">
+              <Link href={`/session?id=${encodeURIComponent(exercise.id)}`}>
+                <Play className="size-4" suppressHydrationWarning />
+                Launch
+              </Link>
+            </Button>
+          </div>
+        </div>
+
+        <Tabs defaultValue="mission">
           <TabsList className="flex h-auto flex-wrap justify-start">
-            <TabsTrigger value="report">Report</TabsTrigger>
-            <TabsTrigger value="questions">Questions</TabsTrigger>
+            <TabsTrigger value="mission">Mission</TabsTrigger>
+            <TabsTrigger value="questions">Prompts</TabsTrigger>
+            <TabsTrigger value="details">Details</TabsTrigger>
           </TabsList>
 
-          <TabsContent value="report" className="space-y-6">
+          <TabsContent value="mission" className="space-y-6">
+            <div className="grid gap-4 lg:grid-cols-3">
+              <PreviewCard title="Players" items={exercise.suggestedParticipants.slice(0, 6)} />
+              <PreviewCard title="Win Conditions" items={exercise.objectives.slice(0, 4)} />
+              <PreviewCard title="Hard Choices" items={exercise.expectedDecisions.slice(0, 4)} />
+            </div>
+            {exercise.irpAnalysis ? <IrpAnalysisSection exercise={exercise} /> : null}
+            {exercise.starterIrpTemplate ? <StarterIrpTemplateSection exercise={exercise} /> : null}
+          </TabsContent>
+
+          <TabsContent value="details" className="space-y-6">
             <Section title="Exercise Overview">
               <div className="grid gap-3 sm:grid-cols-2">
                 <Meta label="Industry" value={exercise.overview.industry} />
@@ -107,14 +137,8 @@ export function ExerciseOutput({
               <p className="mt-4 leading-7 text-muted-foreground">{exercise.overview.purpose}</p>
             </Section>
 
-            <Section title="Scenario Summary">
-              <p className="leading-7 text-muted-foreground">{exercise.scenarioSummary}</p>
-            </Section>
-
             <ListSection title="Exercise Objectives" items={exercise.objectives} />
             <ListSection title="Suggested Participants" items={exercise.suggestedParticipants} badge />
-            {exercise.irpAnalysis ? <IrpAnalysisSection exercise={exercise} /> : null}
-            {exercise.starterIrpTemplate ? <StarterIrpTemplateSection exercise={exercise} /> : null}
             <ListSection title="Expected Decisions" items={exercise.expectedDecisions} />
             <ListSection title="Facilitator Notes" items={exercise.facilitatorNotes} />
 
@@ -154,6 +178,21 @@ export function ExerciseOutput({
         </Tabs>
       </CardContent>
     </Card>
+  );
+}
+
+function PreviewCard({ title, items }: { title: string; items: string[] }) {
+  return (
+    <section className="rounded-md border border-border bg-background/45 p-4">
+      <p className="mb-3 text-sm font-semibold text-foreground">{title}</p>
+      <div className="space-y-2">
+        {items.map((item) => (
+          <div key={item} className="rounded-md border border-primary/20 bg-primary/5 p-3 text-sm leading-6 text-muted-foreground">
+            {item}
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
