@@ -134,6 +134,7 @@ export function TabletopBoardScene({
     scene.add(centerLabel);
 
     addBoardSpaces(scene, boardSpaces);
+    addBoardTrackDecorations(scene, boardSpaces);
     addCardDecks(scene);
 
     const groundBody = new CANNON.Body({ mass: 0, shape: new CANNON.Box(new CANNON.Vec3(4.7, 0.08, 3.6)) });
@@ -427,16 +428,22 @@ function addBoardSpaces(scene: THREE.Scene, boardSpaces: CyberBoardSpace[]) {
     });
     const isVertical = space.side === "left" || space.side === "right";
     const tileGeometry = new THREE.BoxGeometry(
-      isCorner ? 1.1 : isVertical ? 0.82 : 1.12,
+      isCorner ? 0.94 : isVertical ? 0.56 : 0.86,
       0.08,
-      isCorner ? 0.92 : isVertical ? 0.9 : 0.76,
+      isCorner ? 0.78 : isVertical ? 0.72 : 0.54,
     );
     const tile = new THREE.Mesh(tileGeometry, material);
     tile.position.copy(getBoardPosition(index));
     tile.position.y = 0.13;
     scene.add(tile);
 
-    const label = createLabelMesh(boardSpace.label, getSpaceTextColor(boardSpace.tone, isCorner));
+    const label = createLabelMesh(boardSpace.label, getSpaceTextColor(boardSpace.tone, isCorner), {
+      width: 176,
+      height: 64,
+      fontSize: isCorner ? 21 : 19,
+      planeWidth: isVertical ? 0.72 : 0.76,
+      planeHeight: 0.28,
+    });
     label.position.copy(tile.position);
     label.position.y = 0.18;
     label.rotation.x = -Math.PI / 2;
@@ -449,6 +456,113 @@ function addBoardSpaces(scene: THREE.Scene, boardSpaces: CyberBoardSpace[]) {
     }
     scene.add(label);
   }
+}
+
+function addBoardTrackDecorations(scene: THREE.Scene, boardSpaces: CyberBoardSpace[]) {
+  const railMaterial = new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.56, metalness: 0.18 });
+  const accentMaterial = new THREE.MeshStandardMaterial({ color: 0x23d39b, roughness: 0.42, metalness: 0.12 });
+  const dimAccentMaterial = new THREE.MeshBasicMaterial({ color: 0x23d39b, transparent: true, opacity: 0.34 });
+  const amberMaterial = new THREE.MeshBasicMaterial({ color: 0xf5b83d, transparent: true, opacity: 0.42 });
+
+  addFlatBar(scene, 0, 0.185, 2.92, 7.08, 0.038, railMaterial);
+  addFlatBar(scene, 0, 0.185, -2.92, 7.08, 0.038, railMaterial);
+  addFlatBar(scene, -3.82, 0.185, 0, 0.038, 5.18, railMaterial);
+  addFlatBar(scene, 3.82, 0.185, 0, 0.038, 5.18, railMaterial);
+
+  addFlatBar(scene, 0, 0.19, 1.92, 4.38, 0.03, dimAccentMaterial);
+  addFlatBar(scene, 0, 0.19, -1.92, 4.38, 0.03, dimAccentMaterial);
+  addFlatBar(scene, -2.48, 0.19, 0, 0.03, 3.26, dimAccentMaterial);
+  addFlatBar(scene, 2.48, 0.19, 0, 0.03, 3.26, dimAccentMaterial);
+
+  for (let index = 0; index < boardSpaceCount; index += 1) {
+    const space = getBoardSpace(index);
+    const boardSpace = boardSpaces[index];
+    const pip = new THREE.Mesh(
+      new THREE.CylinderGeometry(space.corner ? 0.065 : 0.045, space.corner ? 0.065 : 0.045, 0.026, 16),
+      new THREE.MeshStandardMaterial({
+        color: getSpaceColor(boardSpace.tone, space.corner),
+        roughness: 0.38,
+        metalness: 0.14,
+      }),
+    );
+    pip.rotation.x = Math.PI / 2;
+    pip.position.set(...getOuterMarkerPosition(space));
+    scene.add(pip);
+  }
+
+  const networkNodes = [
+    [-2.06, 0.21, -0.94],
+    [-0.92, 0.21, 0.82],
+    [0.42, 0.21, -0.72],
+    [1.82, 0.21, 0.72],
+  ];
+
+  networkNodes.forEach(([x, y, z], index) => {
+    const node = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.08, 0.08, 0.024, 18),
+      index % 2 === 0 ? accentMaterial : amberMaterial,
+    );
+    node.rotation.x = Math.PI / 2;
+    node.position.set(x, y, z);
+    scene.add(node);
+  });
+
+  addTrace(scene, -2.06, -0.94, -0.92, 0.82, dimAccentMaterial);
+  addTrace(scene, -0.92, 0.82, 0.42, -0.72, amberMaterial);
+  addTrace(scene, 0.42, -0.72, 1.82, 0.72, dimAccentMaterial);
+  addCornerBadges(scene);
+}
+
+function addCornerBadges(scene: THREE.Scene) {
+  const badges = [
+    { text: "START", x: -3.18, z: 2.42, rotation: 0, color: "#ffffff" },
+    { text: "DECIDE", x: 3.18, z: 2.42, rotation: 0, color: "#d8fff1" },
+    { text: "IMPACT", x: 3.18, z: -2.42, rotation: Math.PI, color: "#d8fff1" },
+    { text: "TWIST", x: -3.18, z: -2.42, rotation: Math.PI, color: "#fbbf24" },
+  ];
+
+  badges.forEach((badge) => {
+    const label = createLabelMesh(badge.text, badge.color, {
+      width: 180,
+      height: 54,
+      fontSize: 19,
+      planeWidth: 0.7,
+      planeHeight: 0.22,
+    });
+    label.position.set(badge.x, 0.245, badge.z);
+    label.rotation.set(-Math.PI / 2, 0, badge.rotation);
+    scene.add(label);
+  });
+}
+
+function addFlatBar(scene: THREE.Scene, x: number, y: number, z: number, width: number, depth: number, material: THREE.Material) {
+  const bar = new THREE.Mesh(new THREE.BoxGeometry(width, 0.028, depth), material);
+  bar.position.set(x, y, z);
+  scene.add(bar);
+}
+
+function addTrace(scene: THREE.Scene, startX: number, startZ: number, endX: number, endZ: number, material: THREE.Material) {
+  const length = Math.hypot(endX - startX, endZ - startZ);
+  const trace = new THREE.Mesh(new THREE.BoxGeometry(length, 0.018, 0.028), material);
+  trace.position.set((startX + endX) / 2, 0.205, (startZ + endZ) / 2);
+  trace.rotation.y = -Math.atan2(endZ - startZ, endX - startX);
+  scene.add(trace);
+}
+
+function getOuterMarkerPosition(space: ReturnType<typeof getBoardSpace>): [number, number, number] {
+  if (space.side === "top") {
+    return [space.x, 0.23, space.z + 0.46];
+  }
+
+  if (space.side === "bottom") {
+    return [space.x, 0.23, space.z - 0.46];
+  }
+
+  if (space.side === "left") {
+    return [space.x - 0.44, 0.23, space.z];
+  }
+
+  return [space.x + 0.44, 0.23, space.z];
 }
 
 function getSpaceColor(tone: CyberBoardSpace["tone"], isCorner: boolean) {
@@ -543,7 +657,11 @@ function createPawnMesh(pawn: PawnOption) {
   return group;
 }
 
-function createLabelMesh(text: string, color: string, options?: { width?: number; height?: number; fontSize?: number }) {
+function createLabelMesh(
+  text: string,
+  color: string,
+  options?: { width?: number; height?: number; fontSize?: number; planeWidth?: number; planeHeight?: number },
+) {
   const canvas = document.createElement("canvas");
   canvas.width = options?.width ?? 192;
   canvas.height = options?.height ?? 72;
@@ -562,7 +680,7 @@ function createLabelMesh(text: string, color: string, options?: { width?: number
 
   const texture = new THREE.CanvasTexture(canvas);
   const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
-  return new THREE.Mesh(new THREE.PlaneGeometry(options?.width ? 1.18 : 0.92, options?.height ? 0.36 : 0.34), material);
+  return new THREE.Mesh(new THREE.PlaneGeometry(options?.planeWidth ?? (options?.width ? 1.18 : 0.92), options?.planeHeight ?? (options?.height ? 0.36 : 0.34)), material);
 }
 
 function easeOutCubic(value: number) {
