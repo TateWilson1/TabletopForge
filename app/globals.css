@@ -78,6 +78,10 @@ body {
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
 }
 
+.table-mode-shell {
+  box-shadow: 0 28px 100px rgba(0, 0, 0, 0.34);
+}
+
 .deck-slide {
   animation: slide-focus 0.28s ease-out both;
   background:

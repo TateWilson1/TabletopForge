@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { FileText, ShieldCheck, Wand2, X } from "lucide-react";
+import { FileText, Loader2, ShieldCheck, Wand2, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -85,17 +85,8 @@ export function ExerciseForm() {
     ];
     const startedAt = Date.now();
     const timerId = window.setInterval(() => {
-      const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000);
-      const targetProgress =
-        elapsedSeconds < 3
-          ? 18
-          : elapsedSeconds < 8
-            ? 42
-            : elapsedSeconds < 16
-              ? 68
-              : elapsedSeconds < 30
-                ? 84
-                : Math.min(98, 88 + Math.floor((elapsedSeconds - 30) / 6));
+      const elapsedSeconds = (Date.now() - startedAt) / 1000;
+      const targetProgress = Math.min(96, Math.round(10 + 86 * (1 - Math.exp(-elapsedSeconds / 18))));
 
       setGenerationProgress((current) => Math.max(current, Math.min(98, targetProgress)));
       setGenerationStep(steps[Math.min(steps.length - 1, Math.floor(elapsedSeconds / 7))]);
@@ -166,7 +157,10 @@ export function ExerciseForm() {
     }
 
     setIsGenerating(true);
+    setGenerationProgress(8);
+    setGenerationStep("Preparing exercise context...");
     setError("");
+    await waitForPaint();
 
     let generated = generateExercise({ ...options, hasHumanFacilitator: false });
     let generationNotice = "Exercise generated and saved in this browser.";
@@ -200,6 +194,7 @@ export function ExerciseForm() {
 
   return (
     <div className="mx-auto max-w-3xl">
+      {isGenerating ? <GenerationOverlay progress={generationProgress} step={generationStep} /> : null}
       <Card className="h-fit bg-card/80">
         <CardHeader>
           <div className="flex items-center justify-between gap-3">
@@ -406,14 +401,31 @@ export function ExerciseForm() {
 
           {error ? <p className="text-sm text-destructive">{error}</p> : null}
           {savedNotice ? <p className="text-sm text-primary">{savedNotice}</p> : null}
-          {isGenerating ? <GenerationProgress progress={generationProgress} step={generationStep} /> : null}
-
           <Button className="w-full" size="lg" onClick={handleGenerate} disabled={isGenerating}>
             <Wand2 className="size-4" suppressHydrationWarning />
             {isGenerating ? "Generating With AI..." : "Generate And Start Session"}
           </Button>
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+function GenerationOverlay({ progress, step }: { progress: number; step: string }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/92 p-4 backdrop-blur-md">
+      <div className="w-full max-w-xl rounded-lg border border-primary/30 bg-card p-6 text-center shadow-2xl shadow-black/40">
+        <div className="mx-auto flex size-14 items-center justify-center rounded-lg border border-primary/35 bg-primary/10">
+          <Loader2 className="size-7 animate-spin text-primary" suppressHydrationWarning />
+        </div>
+        <h2 className="mt-5 text-2xl font-semibold text-foreground">Building your tabletop game</h2>
+        <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-muted-foreground">
+          TabletopForge is tailoring the scenario, questions, and learning moments. Longer IRPs can take a little extra time.
+        </p>
+        <div className="mt-5 text-left">
+          <GenerationProgress progress={progress} step={step} />
+        </div>
+      </div>
     </div>
   );
 }
@@ -433,6 +445,14 @@ function GenerationProgress({ progress, step }: { progress: number; step: string
       </p>
     </div>
   );
+}
+
+function waitForPaint() {
+  return new Promise<void>((resolve) => {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => resolve());
+    });
+  });
 }
 
 function SelectField<T extends string>({

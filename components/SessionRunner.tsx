@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, FileText, ListChecks, Plus } from "lucide-react";
 import { FacilitatorSession } from "@/components/FacilitatorSession";
+import { TabletopBoardSession } from "@/components/TabletopBoardSession";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -13,6 +14,7 @@ import type { GeneratedExercise } from "@/lib/types";
 export function SessionRunner({ exerciseId }: { exerciseId: string | null }) {
   const [exercise, setExercise] = useState<GeneratedExercise | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [sessionMode, setSessionMode] = useState<"table" | "classic">("table");
 
   useEffect(() => {
     if (!exerciseId) {
@@ -77,6 +79,18 @@ export function SessionRunner({ exerciseId }: { exerciseId: string | null }) {
           <p className="mt-1 text-sm text-muted-foreground">{exercise.overview.scenario}</p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <Button
+            variant={sessionMode === "table" ? "secondary" : "outline"}
+            onClick={() => setSessionMode("table")}
+          >
+            Table Mode
+          </Button>
+          <Button
+            variant={sessionMode === "classic" ? "secondary" : "outline"}
+            onClick={() => setSessionMode("classic")}
+          >
+            Classic Mode
+          </Button>
           <Button asChild variant="outline">
             <Link href="/generate">
               <ArrowLeft className="size-4" suppressHydrationWarning />
@@ -92,7 +106,11 @@ export function SessionRunner({ exerciseId }: { exerciseId: string | null }) {
         </div>
       </div>
 
-      <FacilitatorSession exercise={exercise} />
+      {sessionMode === "table" ? (
+        <TabletopBoardSession exercise={exercise} onClassicMode={() => setSessionMode("classic")} />
+      ) : (
+        <FacilitatorSession exercise={exercise} />
+      )}
     </main>
   );
 }
