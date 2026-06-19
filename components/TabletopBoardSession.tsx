@@ -186,8 +186,8 @@ export function TabletopBoardSession({
               <div className="max-w-2xl rounded-lg border border-primary/35 bg-card/90 p-6 text-center shadow-2xl shadow-black/40">
                 <Badge variant="secondary" className="mb-4">TabletopForge Table Mode</Badge>
                 <h2 className="text-3xl font-semibold text-foreground sm:text-5xl">Pull up a chair.</h2>
-                <p className="mx-auto mt-4 max-w-xl text-base leading-7 text-muted-foreground">
-                  Choose a pawn, then roll through the exercise one card at a time. The 3D table loads only after you enter so the page does not feel stuck.
+              <p className="mx-auto mt-4 max-w-xl text-base leading-7 text-muted-foreground">
+                  Choose a pawn, then move around the cyber response board one card at a time. The 3D table loads only after you enter so the page does not feel stuck.
                 </p>
                 <div className="mt-6 flex flex-col justify-center gap-3 sm:flex-row">
                   <Button size="lg" onClick={() => setHasEnteredTable(true)}>
@@ -211,7 +211,7 @@ export function TabletopBoardSession({
                 <Badge variant="outline">{exercise.overview.maturityLevel}</Badge>
               </div>
               <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
-                Roll the d20, move the pawn, and let the board reveal the next discussion card.
+                Move around the cybersecurity board track. Each space reveals the next tabletop prompt while the die controls pressure and surprise.
               </p>
             </div>
             <div className="pointer-events-auto flex flex-wrap gap-2">
@@ -276,7 +276,7 @@ export function TabletopBoardSession({
               {isRolling ? "Rolling..." : hasStarted ? "Roll For Next Card" : "Roll To Begin"}
             </Button>
             <p className="text-center text-xs leading-5 text-muted-foreground">
-              Cards stay in order. The die controls pressure and surprise injects.
+              The learning path stays in order. The space you land on frames the next prompt, and high rolls can trigger surprise injects.
               {rollResult > 0 ? ` Last roll: ${rollResult}.` : ""}
             </p>
 
@@ -343,15 +343,25 @@ function TableScenePlaceholder({ label }: { label: string }) {
     <div className="flex h-full min-h-[28rem] w-full items-center justify-center p-6">
       <div className="relative aspect-[16/10] w-full max-w-4xl overflow-hidden rounded-lg border border-primary/25 bg-[radial-gradient(circle_at_center,rgba(35,211,155,0.16),transparent_32rem),linear-gradient(135deg,rgba(91,58,36,0.5),rgba(13,26,38,0.8))] p-6 shadow-2xl shadow-black/30">
         <div className="absolute inset-8 rounded-lg border border-primary/30 bg-background/35" />
-        <div className="absolute inset-12 grid grid-cols-4 grid-rows-3 gap-3">
-          {Array.from({ length: 12 }).map((_, index) => (
-            <div
-              key={index}
-              className={`rounded-md border ${
-                index === 11 ? "border-accent/50 bg-accent/15" : "border-primary/25 bg-primary/10"
-              }`}
-            />
-          ))}
+        <div className="absolute inset-10 grid grid-cols-6 grid-rows-6 gap-2">
+          {Array.from({ length: 36 }).map((_, index) => {
+            const row = Math.floor(index / 6);
+            const col = index % 6;
+            const isTrack = row === 0 || row === 5 || col === 0 || col === 5;
+            const isCorner = isTrack && (row === 0 || row === 5) && (col === 0 || col === 5);
+            if (!isTrack) {
+              return <div key={index} />;
+            }
+
+            return (
+              <div
+                key={index}
+                className={`rounded-md border ${
+                  isCorner ? "border-primary/45 bg-primary/20" : index === 35 ? "border-accent/50 bg-accent/15" : "border-primary/25 bg-primary/10"
+                }`}
+              />
+            );
+          })}
         </div>
         <div className="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-3 rounded-lg border border-border bg-background/80 p-5 text-center backdrop-blur">
           {label.includes("Loading") ? (

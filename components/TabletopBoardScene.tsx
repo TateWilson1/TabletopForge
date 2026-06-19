@@ -65,7 +65,7 @@ export function TabletopBoardScene({
     scene.fog = new THREE.Fog(0x0b111c, 7, 18);
 
     const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 100);
-    camera.position.set(0, 7.2, 11.8);
+    camera.position.set(0, 8.4, 13.4);
     camera.lookAt(0, 0, 0);
 
     const world = new CANNON.World({
@@ -85,21 +85,33 @@ export function TabletopBoardScene({
     scene.add(fillLight);
 
     const tableMaterial = new THREE.MeshStandardMaterial({ color: 0x5b3a24, roughness: 0.72 });
-    const table = new THREE.Mesh(new THREE.BoxGeometry(8.6, 0.35, 5.8), tableMaterial);
+    const table = new THREE.Mesh(new THREE.BoxGeometry(9.4, 0.35, 7.2), tableMaterial);
     table.position.y = -0.28;
     scene.add(table);
 
     const board = new THREE.Mesh(
-      new THREE.BoxGeometry(6.8, 0.12, 4.5),
+      new THREE.BoxGeometry(7.55, 0.12, 5.85),
       new THREE.MeshStandardMaterial({ color: 0x102b28, roughness: 0.86, metalness: 0.05 }),
     );
     board.position.y = 0;
     scene.add(board);
 
+    const centerPanel = new THREE.Mesh(
+      new THREE.BoxGeometry(4.55, 0.08, 2.9),
+      new THREE.MeshStandardMaterial({ color: 0x07131f, roughness: 0.9, metalness: 0.04 }),
+    );
+    centerPanel.position.y = 0.12;
+    scene.add(centerPanel);
+
+    const centerLabel = createLabelMesh("TabletopForge", "#23d39b", { width: 320, height: 96, fontSize: 28 });
+    centerLabel.position.set(0, 0.18, 0);
+    centerLabel.rotation.x = -Math.PI / 2;
+    scene.add(centerLabel);
+
     addBoardSpaces(scene);
     addCardDecks(scene);
 
-    const groundBody = new CANNON.Body({ mass: 0, shape: new CANNON.Box(new CANNON.Vec3(4.3, 0.08, 2.9)) });
+    const groundBody = new CANNON.Body({ mass: 0, shape: new CANNON.Box(new CANNON.Vec3(4.7, 0.08, 3.6)) });
     groundBody.position.set(0, 0.12, 0);
     world.addBody(groundBody);
 
@@ -107,11 +119,11 @@ export function TabletopBoardScene({
       new THREE.IcosahedronGeometry(0.38, 0),
       new THREE.MeshStandardMaterial({ color: 0xf5b83d, roughness: 0.42, metalness: 0.18 }),
     );
-    diceMesh.position.set(0, 0.9, 0);
+    diceMesh.position.set(0.35, 0.9, 0.55);
     scene.add(diceMesh);
 
     const diceBody = new CANNON.Body({ mass: 1.2, shape: new CANNON.Sphere(0.38), linearDamping: 0.34, angularDamping: 0.28 });
-    diceBody.position.set(0, 0.9, 0);
+    diceBody.position.set(0.35, 0.9, 0.55);
     world.addBody(diceBody);
 
     const pawnGroup = createPawnMesh(pawnOptions[0]);
@@ -177,8 +189,8 @@ export function TabletopBoardScene({
       currentState.pawnGroup.rotation.y += isRollingRef.current ? 0.022 : 0.004;
 
       cameraIntro = Math.min(1, cameraIntro + delta * 0.65);
-      const cameraStart = new THREE.Vector3(0, 7.2, 11.8);
-      const cameraTarget = new THREE.Vector3(4.8, 5.6, 7.2);
+      const cameraStart = new THREE.Vector3(0, 8.4, 13.4);
+      const cameraTarget = new THREE.Vector3(5.25, 6.15, 8.45);
       camera.position.copy(cameraStart.lerp(cameraTarget, easeOutCubic(cameraIntro)));
       camera.lookAt(0, 0, 0);
 
@@ -247,7 +259,7 @@ export function TabletopBoardScene({
     }
 
     const push = 3.2 + (rollResult % 5) * 0.3;
-    state.diceBody.position.set(-1.6, 1.2, -0.4);
+    state.diceBody.position.set(-1.55, 1.2, -0.25);
     state.diceBody.velocity.set(push, 4.0, 1.1 - (rollResult % 3));
     state.diceBody.angularVelocity.set(8.5 + rollResult * 0.34, 7.2, 5.2 + rollResult * 0.16);
     state.diceBody.quaternion.setFromEuler(rollResult * 0.1, rollResult * 0.2, rollResult * 0.3);
@@ -270,43 +282,71 @@ export function TabletopBoardScene({
 }
 
 function getBoardPosition(index: number) {
+  const space = getBoardSpace(index);
+  return new THREE.Vector3(space.x, 0, space.z);
+}
+
+function getBoardSpace(index: number) {
   const positions = [
-    [-2.7, 0, 1.65],
-    [-0.9, 0, 1.65],
-    [0.9, 0, 1.65],
-    [2.7, 0, 1.65],
-    [2.7, 0, 0.55],
-    [2.7, 0, -0.55],
-    [2.7, 0, -1.65],
-    [0.9, 0, -1.65],
-    [-0.9, 0, -1.65],
-    [-2.7, 0, -1.65],
-    [-2.7, 0, -0.55],
-    [-2.7, 0, 0.55],
-  ];
-  const [x, y, z] = positions[index % positions.length];
-  return new THREE.Vector3(x, y, z);
+    { x: -3.18, z: 2.42, side: "top", corner: true },
+    { x: -1.9, z: 2.42, side: "top", corner: false },
+    { x: -0.64, z: 2.42, side: "top", corner: false },
+    { x: 0.64, z: 2.42, side: "top", corner: false },
+    { x: 1.9, z: 2.42, side: "top", corner: false },
+    { x: 3.18, z: 2.42, side: "top", corner: true },
+    { x: 3.18, z: 1.46, side: "right", corner: false },
+    { x: 3.18, z: 0.48, side: "right", corner: false },
+    { x: 3.18, z: -0.48, side: "right", corner: false },
+    { x: 3.18, z: -1.46, side: "right", corner: false },
+    { x: 3.18, z: -2.42, side: "bottom", corner: true },
+    { x: 1.9, z: -2.42, side: "bottom", corner: false },
+    { x: 0.64, z: -2.42, side: "bottom", corner: false },
+    { x: -0.64, z: -2.42, side: "bottom", corner: false },
+    { x: -1.9, z: -2.42, side: "bottom", corner: false },
+    { x: -3.18, z: -2.42, side: "bottom", corner: true },
+    { x: -3.18, z: -1.46, side: "left", corner: false },
+    { x: -3.18, z: -0.48, side: "left", corner: false },
+    { x: -3.18, z: 0.48, side: "left", corner: false },
+    { x: -3.18, z: 1.46, side: "left", corner: false },
+  ] as const;
+
+  return positions[index % positions.length];
 }
 
 function addBoardSpaces(scene: THREE.Scene) {
-  const tileGeometry = new THREE.BoxGeometry(1.22, 0.08, 0.72);
   for (let index = 0; index < boardSpaceCount; index += 1) {
-    const isCorner = [0, 3, 6, 9].includes(index);
+    const space = getBoardSpace(index);
+    const isCorner = space.corner === true;
     const isInject = boardSpaceLabels[index] === "Twist";
+    const isDecision = ["Decision", "Severity", "Legal"].includes(boardSpaceLabels[index]);
+    const isRecovery = ["Backup", "Restore", "Lesson", "Debrief"].includes(boardSpaceLabels[index]);
     const material = new THREE.MeshStandardMaterial({
-      color: isInject ? 0x7c2d12 : isCorner ? 0x0f766e : 0x172554,
+      color: isInject ? 0x7c2d12 : isCorner ? 0x0f766e : isDecision ? 0x4338ca : isRecovery ? 0x14532d : 0x172554,
       roughness: 0.72,
       metalness: 0.02,
     });
+    const isVertical = space.side === "left" || space.side === "right";
+    const tileGeometry = new THREE.BoxGeometry(
+      isCorner ? 1.1 : isVertical ? 0.82 : 1.12,
+      0.08,
+      isCorner ? 0.92 : isVertical ? 0.9 : 0.76,
+    );
     const tile = new THREE.Mesh(tileGeometry, material);
     tile.position.copy(getBoardPosition(index));
     tile.position.y = 0.13;
     scene.add(tile);
 
-    const label = createLabelMesh(boardSpaceLabels[index], isInject ? "#fbbf24" : "#d8fff1");
+    const label = createLabelMesh(boardSpaceLabels[index], isInject ? "#fbbf24" : isCorner ? "#ffffff" : "#d8fff1");
     label.position.copy(tile.position);
     label.position.y = 0.18;
     label.rotation.x = -Math.PI / 2;
+    if (space.side === "right") {
+      label.rotation.z = -Math.PI / 2;
+    } else if (space.side === "left") {
+      label.rotation.z = Math.PI / 2;
+    } else if (space.side === "bottom") {
+      label.rotation.z = Math.PI;
+    }
     scene.add(label);
   }
 }
@@ -317,17 +357,27 @@ function addCardDecks(scene: THREE.Scene) {
 
   for (let index = 0; index < 4; index += 1) {
     const card = new THREE.Mesh(new THREE.BoxGeometry(0.86, 0.035, 1.16), deckMaterial);
-    card.position.set(-0.95 + index * 0.035, 0.22 + index * 0.018, 0);
-    card.rotation.y = 0.1;
+    card.position.set(-1.25 + index * 0.035, 0.22 + index * 0.018, 0.08);
+    card.rotation.y = 0.46;
     scene.add(card);
   }
 
   for (let index = 0; index < 3; index += 1) {
     const card = new THREE.Mesh(new THREE.BoxGeometry(0.86, 0.035, 1.16), injectMaterial);
-    card.position.set(0.98 + index * 0.035, 0.22 + index * 0.018, 0);
-    card.rotation.y = -0.12;
+    card.position.set(1.25 + index * 0.035, 0.22 + index * 0.018, -0.08);
+    card.rotation.y = -0.48;
     scene.add(card);
   }
+
+  const promptLabel = createLabelMesh("Prompt Deck", "#d8fff1", { width: 220, height: 80, fontSize: 22 });
+  promptLabel.position.set(-1.25, 0.32, 0.08);
+  promptLabel.rotation.set(-Math.PI / 2, 0, 0.46);
+  scene.add(promptLabel);
+
+  const injectLabel = createLabelMesh("Inject Deck", "#fbbf24", { width: 220, height: 80, fontSize: 22 });
+  injectLabel.position.set(1.25, 0.32, -0.08);
+  injectLabel.rotation.set(-Math.PI / 2, 0, -0.48);
+  scene.add(injectLabel);
 }
 
 function createPawnMesh(pawn: PawnOption) {
@@ -358,10 +408,10 @@ function createPawnMesh(pawn: PawnOption) {
   return group;
 }
 
-function createLabelMesh(text: string, color: string) {
+function createLabelMesh(text: string, color: string, options?: { width?: number; height?: number; fontSize?: number }) {
   const canvas = document.createElement("canvas");
-  canvas.width = 192;
-  canvas.height = 72;
+  canvas.width = options?.width ?? 192;
+  canvas.height = options?.height ?? 72;
   const context = canvas.getContext("2d");
   if (context) {
     context.fillStyle = "rgba(6, 12, 20, 0.72)";
@@ -369,7 +419,7 @@ function createLabelMesh(text: string, color: string) {
     context.strokeStyle = "rgba(35, 211, 155, 0.52)";
     context.strokeRect(6, 6, canvas.width - 12, canvas.height - 12);
     context.fillStyle = color;
-    context.font = "bold 22px Arial";
+    context.font = `bold ${options?.fontSize ?? 22}px Arial`;
     context.textAlign = "center";
     context.textBaseline = "middle";
     context.fillText(text, canvas.width / 2, canvas.height / 2);
@@ -377,7 +427,7 @@ function createLabelMesh(text: string, color: string) {
 
   const texture = new THREE.CanvasTexture(canvas);
   const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
-  return new THREE.Mesh(new THREE.PlaneGeometry(0.92, 0.34), material);
+  return new THREE.Mesh(new THREE.PlaneGeometry(options?.width ? 1.18 : 0.92, options?.height ? 0.36 : 0.34), material);
 }
 
 function easeOutCubic(value: number) {

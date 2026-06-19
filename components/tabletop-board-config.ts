@@ -39,19 +39,28 @@ export const pawnOptions: PawnOption[] = [
   },
 ];
 
-export const boardSpaceCount = 12;
+export const boardSpaceCount = 20;
 
 export const boardSpaceLabels = [
-  "Brief",
+  "Start",
+  "Report",
   "Triage",
-  "Facts",
-  "Choice",
-  "Discuss",
+  "Scope",
   "Logs",
-  "People",
+  "Contain",
+  "Decision",
   "Vendor",
+  "Comms",
+  "Leadership",
   "Impact",
-  "Recover",
+  "Legal",
+  "Backup",
+  "Restore",
+  "Customers",
   "Lesson",
+  "Debrief",
+  "Gap",
+  "Severity",
+  "Evidence",
   "Twist",
 ];
