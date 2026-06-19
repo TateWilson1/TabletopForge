@@ -3,16 +3,18 @@
 import { useEffect, useRef, useState } from "react";
 import * as CANNON from "cannon-es";
 import * as THREE from "three";
-import { boardSpaceCount, boardSpaceLabels, pawnOptions, type PawnKey, type PawnOption } from "@/components/tabletop-board-config";
+import { boardSpaceCount, pawnOptions, type CyberBoardSpace, type PawnKey, type PawnOption } from "@/components/tabletop-board-config";
 
 export function TabletopBoardScene({
   pawn,
+  boardSpaces,
   positionIndex,
   rollNonce,
   rollResult,
   isRolling,
 }: {
   pawn: PawnKey;
+  boardSpaces: CyberBoardSpace[];
   positionIndex: number;
   rollNonce: number;
   rollResult: number;
@@ -27,7 +29,7 @@ export function TabletopBoardScene({
     camera: THREE.PerspectiveCamera;
     world: CANNON.World;
     diceBody: CANNON.Body;
-    diceMesh: THREE.Mesh;
+    diceMesh: THREE.Object3D;
     pawnBody: CANNON.Body;
     pawnGroup: THREE.Group;
     pawnTarget: THREE.Vector3;
@@ -59,10 +61,14 @@ export function TabletopBoardScene({
 
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.35));
     renderer.shadowMap.enabled = false;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.03;
     mountElement.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
-    scene.fog = new THREE.Fog(0x0b111c, 7, 18);
+    scene.background = new THREE.Color(0x0b1117);
+    scene.fog = new THREE.Fog(0x0b1117, 8, 20);
 
     const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 100);
     camera.position.set(0, 8.4, 13.4);
@@ -73,28 +79,47 @@ export function TabletopBoardScene({
     });
     world.broadphase = new CANNON.SAPBroadphase(world);
 
-    const ambient = new THREE.AmbientLight(0xffffff, 0.68);
+    const ambient = new THREE.AmbientLight(0xfff3df, 0.58);
     scene.add(ambient);
 
-    const keyLight = new THREE.DirectionalLight(0xffffff, 1.25);
-    keyLight.position.set(3, 7, 5);
+    const keyLight = new THREE.DirectionalLight(0xfff4df, 1.2);
+    keyLight.position.set(2.8, 7.2, 5.4);
     scene.add(keyLight);
 
     const fillLight = new THREE.PointLight(0x23d39b, 0.9, 9);
     fillLight.position.set(-3.6, 2.6, -2.6);
     scene.add(fillLight);
 
-    const tableMaterial = new THREE.MeshStandardMaterial({ color: 0x5b3a24, roughness: 0.72 });
+    const floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(18, 14),
+      new THREE.MeshStandardMaterial({ color: 0x171a1f, roughness: 0.88, metalness: 0.02 }),
+    );
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.y = -0.82;
+    scene.add(floor);
+
+    const tableMaterial = new THREE.MeshStandardMaterial({ color: 0x6b4228, roughness: 0.68, metalness: 0.02 });
     const table = new THREE.Mesh(new THREE.BoxGeometry(9.4, 0.35, 7.2), tableMaterial);
     table.position.y = -0.28;
     scene.add(table);
 
+    addTableLegs(scene, tableMaterial);
+    addTabletopDetails(scene);
+
     const board = new THREE.Mesh(
       new THREE.BoxGeometry(7.55, 0.12, 5.85),
-      new THREE.MeshStandardMaterial({ color: 0x102b28, roughness: 0.86, metalness: 0.05 }),
+      new THREE.MeshStandardMaterial({ color: 0x0f2c2b, roughness: 0.82, metalness: 0.04 }),
     );
     board.position.y = 0;
     scene.add(board);
+
+    const boardTrim = new THREE.Mesh(
+      new THREE.BoxGeometry(7.82, 0.08, 6.12),
+      new THREE.MeshStandardMaterial({ color: 0x1f2937, roughness: 0.72, metalness: 0.06 }),
+    );
+    boardTrim.position.y = -0.015;
+    scene.add(boardTrim);
+    board.position.y = 0.035;
 
     const centerPanel = new THREE.Mesh(
       new THREE.BoxGeometry(4.55, 0.08, 2.9),
@@ -108,17 +133,14 @@ export function TabletopBoardScene({
     centerLabel.rotation.x = -Math.PI / 2;
     scene.add(centerLabel);
 
-    addBoardSpaces(scene);
+    addBoardSpaces(scene, boardSpaces);
     addCardDecks(scene);
 
     const groundBody = new CANNON.Body({ mass: 0, shape: new CANNON.Box(new CANNON.Vec3(4.7, 0.08, 3.6)) });
     groundBody.position.set(0, 0.12, 0);
     world.addBody(groundBody);
 
-    const diceMesh = new THREE.Mesh(
-      new THREE.IcosahedronGeometry(0.38, 0),
-      new THREE.MeshStandardMaterial({ color: 0xf5b83d, roughness: 0.42, metalness: 0.18 }),
-    );
+    const diceMesh = createD20Mesh();
     diceMesh.position.set(0.35, 0.9, 0.55);
     scene.add(diceMesh);
 
@@ -218,7 +240,7 @@ export function TabletopBoardScene({
       }
       renderer.dispose();
       scene.traverse((object) => {
-        if (object instanceof THREE.Mesh) {
+        if (object instanceof THREE.Mesh || object instanceof THREE.LineSegments) {
           object.geometry.dispose();
           const materials = Array.isArray(object.material) ? object.material : [object.material];
           materials.forEach((material) => material.dispose());
@@ -227,7 +249,7 @@ export function TabletopBoardScene({
       mountElement.removeChild(renderer.domElement);
       sceneRef.current = null;
     };
-  }, []);
+  }, [boardSpaces]);
 
   useEffect(() => {
     const state = sceneRef.current;
@@ -249,8 +271,8 @@ export function TabletopBoardScene({
       return;
     }
 
-    state.pawnTarget.copy(getBoardPosition(positionIndex % boardSpaceCount).clone().setY(0.48));
-  }, [positionIndex]);
+    state.pawnTarget.copy(getBoardPosition(positionIndex % boardSpaces.length).clone().setY(0.48));
+  }, [boardSpaces.length, positionIndex]);
 
   useEffect(() => {
     const state = sceneRef.current;
@@ -313,15 +335,93 @@ function getBoardSpace(index: number) {
   return positions[index % positions.length];
 }
 
-function addBoardSpaces(scene: THREE.Scene) {
+function addTableLegs(scene: THREE.Scene, material: THREE.Material) {
+  const legGeometry = new THREE.BoxGeometry(0.36, 1.35, 0.36);
+  const legPositions = [
+    [-4.25, -1.0, -3.05],
+    [4.25, -1.0, -3.05],
+    [-4.25, -1.0, 3.05],
+    [4.25, -1.0, 3.05],
+  ];
+
+  legPositions.forEach(([x, y, z]) => {
+    const leg = new THREE.Mesh(legGeometry, material);
+    leg.position.set(x, y, z);
+    scene.add(leg);
+  });
+}
+
+function addTabletopDetails(scene: THREE.Scene) {
+  const grainMaterial = new THREE.MeshBasicMaterial({ color: 0x8b5a36, transparent: true, opacity: 0.18 });
+  for (let index = 0; index < 9; index += 1) {
+    const grain = new THREE.Mesh(new THREE.PlaneGeometry(8.4, 0.018), grainMaterial);
+    grain.position.set(0, -0.095, -3.05 + index * 0.76);
+    grain.rotation.x = -Math.PI / 2;
+    scene.add(grain);
+  }
+
+  const notebook = new THREE.Mesh(
+    new THREE.BoxGeometry(1.15, 0.05, 0.78),
+    new THREE.MeshStandardMaterial({ color: 0xe7dcc4, roughness: 0.76 }),
+  );
+  notebook.position.set(-3.78, 0.02, -2.48);
+  notebook.rotation.y = 0.2;
+  scene.add(notebook);
+
+  const pen = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.035, 0.035, 0.9, 12),
+    new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.42, metalness: 0.2 }),
+  );
+  pen.position.set(-3.55, 0.12, -2.28);
+  pen.rotation.z = Math.PI / 2;
+  pen.rotation.y = -0.36;
+  scene.add(pen);
+
+  const coffee = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.22, 0.18, 0.34, 20),
+    new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.48 }),
+  );
+  coffee.position.set(3.9, 0.05, 2.62);
+  scene.add(coffee);
+
+  const laptop = new THREE.Mesh(
+    new THREE.BoxGeometry(1.18, 0.05, 0.72),
+    new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.55, metalness: 0.18 }),
+  );
+  laptop.position.set(3.55, 0.01, -2.65);
+  laptop.rotation.y = -0.18;
+  scene.add(laptop);
+}
+
+function createD20Mesh() {
+  const group = new THREE.Group();
+  const diceGeometry = new THREE.IcosahedronGeometry(0.38, 0);
+  const diceMaterial = new THREE.MeshStandardMaterial({ color: 0xf4b83c, roughness: 0.38, metalness: 0.14 });
+  const dice = new THREE.Mesh(diceGeometry, diceMaterial);
+  group.add(dice);
+
+  const edges = new THREE.LineSegments(
+    new THREE.EdgesGeometry(diceGeometry),
+    new THREE.LineBasicMaterial({ color: 0x6f4211, transparent: true, opacity: 0.75 }),
+  );
+  group.add(edges);
+
+  const mark = createLabelMesh("20", "#3b2507", { width: 96, height: 96, fontSize: 42 });
+  mark.position.set(0, 0.39, 0);
+  mark.rotation.x = -Math.PI / 2;
+  mark.scale.setScalar(0.45);
+  group.add(mark);
+
+  return group;
+}
+
+function addBoardSpaces(scene: THREE.Scene, boardSpaces: CyberBoardSpace[]) {
   for (let index = 0; index < boardSpaceCount; index += 1) {
     const space = getBoardSpace(index);
     const isCorner = space.corner === true;
-    const isInject = boardSpaceLabels[index] === "Twist";
-    const isDecision = ["Decision", "Severity", "Legal"].includes(boardSpaceLabels[index]);
-    const isRecovery = ["Backup", "Restore", "Lesson", "Debrief"].includes(boardSpaceLabels[index]);
+    const boardSpace = boardSpaces[index];
     const material = new THREE.MeshStandardMaterial({
-      color: isInject ? 0x7c2d12 : isCorner ? 0x0f766e : isDecision ? 0x4338ca : isRecovery ? 0x14532d : 0x172554,
+      color: getSpaceColor(boardSpace.tone, isCorner),
       roughness: 0.72,
       metalness: 0.02,
     });
@@ -336,7 +436,7 @@ function addBoardSpaces(scene: THREE.Scene) {
     tile.position.y = 0.13;
     scene.add(tile);
 
-    const label = createLabelMesh(boardSpaceLabels[index], isInject ? "#fbbf24" : isCorner ? "#ffffff" : "#d8fff1");
+    const label = createLabelMesh(boardSpace.label, getSpaceTextColor(boardSpace.tone, isCorner));
     label.position.copy(tile.position);
     label.position.y = 0.18;
     label.rotation.x = -Math.PI / 2;
@@ -349,6 +449,41 @@ function addBoardSpaces(scene: THREE.Scene) {
     }
     scene.add(label);
   }
+}
+
+function getSpaceColor(tone: CyberBoardSpace["tone"], isCorner: boolean) {
+  if (tone === "inject") {
+    return 0x7c2d12;
+  }
+
+  if (isCorner || tone === "start") {
+    return 0x0f766e;
+  }
+
+  const colors: Record<CyberBoardSpace["tone"], number> = {
+    start: 0x0f766e,
+    triage: 0x1d4ed8,
+    decision: 0x4338ca,
+    technical: 0x172554,
+    business: 0x334155,
+    recovery: 0x14532d,
+    gap: 0x4a2d0b,
+    inject: 0x7c2d12,
+  };
+
+  return colors[tone];
+}
+
+function getSpaceTextColor(tone: CyberBoardSpace["tone"], isCorner: boolean) {
+  if (tone === "inject" || tone === "gap") {
+    return "#fbbf24";
+  }
+
+  if (isCorner || tone === "start") {
+    return "#ffffff";
+  }
+
+  return "#d8fff1";
 }
 
 function addCardDecks(scene: THREE.Scene) {

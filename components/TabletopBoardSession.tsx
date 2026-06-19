@@ -16,7 +16,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { boardSpaceCount, pawnOptions, type PawnKey } from "@/components/tabletop-board-config";
+import { buildCyberBoardSpaces, pawnOptions, type PawnKey } from "@/components/tabletop-board-config";
 import type { GeneratedExercise } from "@/lib/types";
 
 type CardKind = "brief" | "question" | "decision" | "gap" | "inject";
@@ -51,6 +51,7 @@ export function TabletopBoardSession({
 }) {
   const deck = useMemo(() => buildBoardDeck(exercise), [exercise]);
   const injectDeck = useMemo(() => buildInjectDeck(exercise), [exercise]);
+  const boardSpaces = useMemo(() => buildCyberBoardSpaces(exercise), [exercise]);
   const [selectedPawn, setSelectedPawn] = useState<PawnKey>("sentinel");
   const [hasStarted, setHasStarted] = useState(false);
   const [positionIndex, setPositionIndex] = useState(0);
@@ -80,7 +81,7 @@ export function TabletopBoardSession({
     }
 
     const nextRoll = Math.floor(Math.random() * 20) + 1;
-    const nextPosition = (positionIndex + 1) % boardSpaceCount;
+    const nextPosition = (positionIndex + 1) % boardSpaces.length;
     const shouldInject = hasStarted && nextRoll >= injectThreshold && injectDeck.length > 0;
     const nextDeckIndex = (deckIndex + 1) % deck.length;
     const nextCard = deck[nextDeckIndex];
@@ -106,7 +107,7 @@ export function TabletopBoardSession({
       setHasStarted(true);
       setIsRolling(false);
     }, 1350);
-  }, [deck, deckIndex, decisionPath, hasStarted, injectCount, injectDeck, injectThreshold, isInjectOverlayOpen, isRolling, positionIndex]);
+  }, [boardSpaces.length, deck, deckIndex, decisionPath, hasStarted, injectCount, injectDeck, injectThreshold, isInjectOverlayOpen, isRolling, positionIndex]);
 
   function closeInjectOverlay() {
     if (pendingCard) {
@@ -172,6 +173,7 @@ export function TabletopBoardSession({
           {hasEnteredTable ? (
             <LazyTabletopBoardScene
               pawn={selectedPawn}
+              boardSpaces={boardSpaces}
               positionIndex={positionIndex}
               rollNonce={rollNonce}
               rollResult={rollResult}
@@ -211,7 +213,7 @@ export function TabletopBoardSession({
                 <Badge variant="outline">{exercise.overview.maturityLevel}</Badge>
               </div>
               <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
-                Move around the cybersecurity board track. Each space reveals the next tabletop prompt while the die controls pressure and surprise.
+                This board is tuned for {exercise.overview.industry.toLowerCase()}, {exercise.overview.organizationSize} people, and a {exercise.overview.scenario.toLowerCase()} scenario.
               </p>
             </div>
             <div className="pointer-events-auto flex flex-wrap gap-2">
