@@ -94,6 +94,72 @@ export interface AdminOverview {
   }>;
 }
 
+export interface TabletopAiInjectRequest {
+  exercise: {
+    organization: string;
+    industry: string;
+    organizationSize: string;
+    scenario: string;
+    maturityLevel: string;
+    duration: string;
+    summary: string;
+    objectives: string[];
+  };
+  irpAnalysis?: unknown;
+  currentStep: {
+    title: string;
+    knownFacts: string[];
+    unknowns: string[];
+    decisions: string[];
+    selectedDecision?: string;
+  };
+  previousInjects: string[];
+  sessionNotes: string;
+}
+
+export interface TabletopAiInjectResponse {
+  model: string;
+  inject: {
+    injectTitle: string;
+    injectText: string;
+    pressureLevel: "low" | "medium" | "high" | "critical";
+    followUpQuestion: string;
+    expectedDecision: string;
+  };
+  usage?: {
+    inputTokens: number | null;
+    outputTokens: number | null;
+  };
+}
+
+export interface TabletopAiAssistRequest {
+  question: string;
+  exercise: TabletopAiInjectRequest["exercise"];
+  currentStep: {
+    title: string;
+    knownFacts: string[];
+    unknowns: string[];
+    decisions: string[];
+    activeDecision: string;
+    activePrompt: string;
+  };
+  irpAnalysis?: unknown;
+  previousInjects: string[];
+  sessionNotes: string;
+  actionItems: string;
+}
+
+export interface TabletopAiAssistResponse {
+  answer: string;
+  irpFinding?: string;
+  recommendedNextStep?: string;
+  missingInfo?: string[];
+  usage?: {
+    inputTokens: number | null;
+    outputTokens: number | null;
+  };
+}
+
 export function normalizeAccountState(account: Partial<AccountState> | null | undefined): AccountState | null {
   if (!account?.user) {
     return null;
@@ -299,6 +365,22 @@ export async function resetAdminFreeGeneration(email: string) {
     method: "POST",
     auth: true,
     body: JSON.stringify({ email }),
+  });
+}
+
+export async function requestTabletopAiInject(payload: TabletopAiInjectRequest) {
+  return apiFetch<TabletopAiInjectResponse>("/api/ai/generate-inject", {
+    method: "POST",
+    auth: true,
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function requestTabletopAiAssistance(payload: TabletopAiAssistRequest) {
+  return apiFetch<TabletopAiAssistResponse>("/api/ai/assist", {
+    method: "POST",
+    auth: true,
+    body: JSON.stringify(payload),
   });
 }
 
