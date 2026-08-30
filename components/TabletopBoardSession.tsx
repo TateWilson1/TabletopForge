@@ -395,6 +395,10 @@ export function TabletopBoardSession({
               rollNonce={rollNonce}
               rollResult={rollResult}
               isRolling={isRolling}
+              sceneTitle={exercise.overview.scenario}
+              sceneSubtitle={`${exercise.overview.industry} | ${exercise.overview.organizationSize} | ${exercise.overview.maturityLevel}`}
+              sceneIndustry={exercise.overview.industry}
+              sceneOrganizationSize={exercise.overview.organizationSize}
             />
           ) : (
             <TableScenePlaceholder label="Ready when you are." />
