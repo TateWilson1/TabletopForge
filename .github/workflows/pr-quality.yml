@@ -1,0 +1,25 @@
+name: Pull Request Quality Checks
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: TypeScript static checking
+        run: npx tsc --noEmit
+      - name: Navigation accessibility regression check
+        run: node --test tests/navigation-a11y.test.mjs
+      - name: Lint changed layout
+        run: npx eslint app/layout.tsx
