@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, FileText, ListChecks, Plus } from "lucide-react";
 import { FacilitatorSession } from "@/components/FacilitatorSession";
+import { LiveLauncher } from "@/components/live/LiveLauncher";
 import { TabletopBoardSession } from "@/components/TabletopBoardSession";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,7 +15,7 @@ import type { GeneratedExercise } from "@/lib/types";
 export function SessionRunner({ exerciseId }: { exerciseId: string | null }) {
   const [exercise, setExercise] = useState<GeneratedExercise | null>(null);
   const [loaded, setLoaded] = useState(false);
-  const [sessionMode, setSessionMode] = useState<"table" | "classic">("table");
+  const [sessionMode, setSessionMode] = useState<"live" | "table" | "classic">("live");
 
   useEffect(() => {
     if (!exerciseId) {
@@ -68,10 +69,10 @@ export function SessionRunner({ exerciseId }: { exerciseId: string | null }) {
 
   return (
     <main className="mx-auto max-w-[1680px] px-3 py-4 sm:px-5 lg:px-7">
-      <div className="mb-4 flex flex-col gap-4 border-b border-border/70 pb-4 xl:flex-row xl:items-center xl:justify-between">
+      <div className="no-print mb-4 flex flex-col gap-4 border-b border-border/70 pb-4 xl:flex-row xl:items-center xl:justify-between">
         <div className="min-w-0">
           <div className="mb-2 flex flex-wrap gap-2">
-            <Badge variant="secondary">Interactive tabletop deck</Badge>
+            <Badge variant="secondary">{sessionMode === "live" ? "Live simulation" : "Interactive tabletop deck"}</Badge>
             <Badge variant="outline">{exercise.overview.duration}</Badge>
             <Badge variant="outline">{exercise.overview.maturityLevel}</Badge>
           </div>
@@ -79,6 +80,9 @@ export function SessionRunner({ exerciseId }: { exerciseId: string | null }) {
           <p className="mt-1 text-sm text-muted-foreground">{exercise.overview.scenario}</p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <Button variant={sessionMode === "live" ? "secondary" : "outline"} onClick={() => setSessionMode("live")}>
+            Live Simulation
+          </Button>
           <Button
             variant={sessionMode === "table" ? "secondary" : "outline"}
             onClick={() => setSessionMode("table")}
@@ -106,7 +110,9 @@ export function SessionRunner({ exerciseId }: { exerciseId: string | null }) {
         </div>
       </div>
 
-      {sessionMode === "table" ? (
+      {sessionMode === "live" ? (
+        <LiveLauncher exercise={exercise} />
+      ) : sessionMode === "table" ? (
         <TabletopBoardSession exercise={exercise} onClassicMode={() => setSessionMode("classic")} />
       ) : (
         <FacilitatorSession exercise={exercise} />

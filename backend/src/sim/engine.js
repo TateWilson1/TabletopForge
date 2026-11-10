@@ -620,7 +620,8 @@ export function buildView(sim, state, viewer) {
               options: decision.options.map((option) => ({
                 id: option.id,
                 label: option.label,
-                votes: Object.values(votes).filter((vote) => vote.optionId === option.id).length,
+                // Live tallies would anchor the room; only the facilitator sees them before commit.
+                votes: isFacilitator || ended || revealOutcome ? Object.values(votes).filter((vote) => vote.optionId === option.id).length : undefined,
                 quality: isFacilitator || ended || revealOutcome ? option.quality : undefined,
               })),
               myVote: votes[isFacilitator ? "facilitator" : me?.id]?.optionId ?? "",

@@ -24,6 +24,9 @@ export interface AccountEntitlements {
   subscriptionGenerationsRemainingThisMonth: number;
   subscriptionStatus: string;
   billingPlan: string;
+  maxRoomParticipants?: number;
+  aiFeatureEnabled?: boolean;
+  roomAiIncluded?: boolean;
 }
 
 export interface AccountState {
@@ -384,9 +387,28 @@ export async function requestTabletopAiAssistance(payload: TabletopAiAssistReque
   });
 }
 
-async function apiFetch<T>(
+export async function fetchStoredTabletop(tabletopId: string) {
+  return apiFetch<{ tabletopId: string; title: string; exercise: GeneratedExercise }>(`/api/tabletops/${encodeURIComponent(tabletopId)}`, {
+    method: "GET",
+    auth: true,
+  });
+}
+
+export class ApiError extends Error {
+  status: number;
+  code?: string;
+
+  constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
+export async function apiFetch<T>(
   path: string,
-  options: RequestInit & { auth?: boolean } = {},
+  options: RequestInit & { auth?: boolean; roomToken?: string } = {},
 ): Promise<T> {
   if (!API_URL) {
     throw new Error("The TabletopForge backend URL is not configured.");
@@ -403,6 +425,10 @@ async function apiFetch<T>(
     headers.set("Authorization", `Bearer ${token}`);
   }
 
+  if (options.roomToken) {
+    headers.set("x-room-token", options.roomToken);
+  }
+
   const response = await fetch(`${API_URL}${path}`, {
     ...options,
     headers,
@@ -410,7 +436,7 @@ async function apiFetch<T>(
 
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(typeof data.error === "string" ? data.error : "Request failed.");
+    throw new ApiError(typeof data.error === "string" ? data.error : "Request failed.", response.status, typeof data.code === "string" ? data.code : undefined);
   }
 
   return data as T;

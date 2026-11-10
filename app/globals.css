@@ -169,3 +169,52 @@ body {
     transition: none;
   }
 }
+
+/* After-action reports print as a clean, light document. */
+@media print {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 220 20% 12%;
+    --card: 0 0% 100%;
+    --card-foreground: 220 20% 12%;
+    --muted: 220 14% 92%;
+    --muted-foreground: 220 9% 34%;
+    --border: 220 13% 80%;
+    --primary: 160 84% 24%;
+    --accent: 32 90% 32%;
+  }
+
+  body,
+  .signal-grid {
+    background: #fff !important;
+  }
+
+  .site-header,
+  .site-footer,
+  .no-print,
+  nextjs-portal {
+    display: none !important;
+  }
+
+  .report-root {
+    max-width: none !important;
+  }
+
+  .report-section {
+    box-shadow: none !important;
+    break-inside: avoid-page;
+    background: #fff !important;
+  }
+
+  .report-root [class*="text-emerald-300"] {
+    color: #047857 !important;
+  }
+
+  .report-root [class*="text-amber-300"] {
+    color: #b45309 !important;
+  }
+
+  .report-root [class*="text-red-300"] {
+    color: #b91c1c !important;
+  }
+}

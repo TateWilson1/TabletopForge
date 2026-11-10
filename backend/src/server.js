@@ -881,6 +881,7 @@ registerRoomRoutes(app, {
   getRoomParticipantLimit: async (user) => buildEntitlements(user).maxRoomParticipants,
   ai: {
     maxCallsPerRoom: MAX_AI_CALLS_PER_ROOM,
+    isIncluded: (user) => ACTIVE_SUBSCRIPTION_STATUSES.has(user.subscriptionStatus),
     validateConfig: validateAiConfig,
     consumeDailyRequest,
     async complete({ system, payload, schemaName, schema }) {
@@ -1591,6 +1592,7 @@ function buildEntitlements(user, subscriptionGenerationsUsedThisMonth = 0) {
     billingPlan: user.billingPlan ?? "free",
     maxRoomParticipants: hasActiveSubscription ? ROOM_PARTICIPANT_LIMITS.paid : ROOM_PARTICIPANT_LIMITS.free,
     aiFeatureEnabled: isAiFeatureEnabled(),
+    roomAiIncluded: hasActiveSubscription && isAiFeatureEnabled(),
   };
 }
 

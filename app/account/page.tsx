@@ -13,7 +13,7 @@ export default function AccountPage() {
     }
 
     const next = new URLSearchParams(window.location.search).get("next");
-    if (next?.startsWith("/")) {
+    if (next?.startsWith("/") && !next.startsWith("//") && !next.includes("\\")) {
       router.push(next);
     }
   }

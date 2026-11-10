@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CreditCard, FileText, LogOut, Mail, RefreshCw, ShieldCheck, UserCheck } from "lucide-react";
+import { CreditCard, LogOut, Mail, RefreshCw, ShieldCheck, UserCheck } from "lucide-react";
+import { AccountLibrary } from "@/components/AccountLibrary";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -237,7 +238,7 @@ export function AccountPanel({
                   Start Subscription
                 </Button>
               </div>
-              <TabletopHistory tabletops={tabletops} />
+              <AccountLibrary tabletops={tabletops} />
             </>
           ) : null}
 
@@ -332,32 +333,6 @@ export function AccountPanel({
         {error ? <p className="text-sm text-destructive">{error}</p> : null}
       </CardContent>
     </Card>
-  );
-}
-
-function TabletopHistory({ tabletops }: { tabletops: AccountTabletop[] }) {
-  return (
-    <section className="rounded-md border border-border bg-background/45 p-4">
-      <div className="mb-3 flex items-center gap-2">
-        <FileText className="size-4 text-primary" suppressHydrationWarning />
-        <h3 className="text-sm font-semibold text-foreground">Recent Tabletop Generations</h3>
-      </div>
-      {tabletops.length === 0 ? (
-        <p className="text-sm leading-6 text-muted-foreground">Generated tabletops will appear here after you create them.</p>
-      ) : (
-        <div className="space-y-2">
-          {tabletops.slice(0, 8).map((tabletop) => (
-            <div key={tabletop.id} className="rounded-md border border-border bg-background/55 p-3">
-              <p className="text-sm font-medium text-foreground">{tabletop.title}</p>
-              <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                {[tabletop.scenarioType, tabletop.industry, tabletop.maturityLevel].filter(Boolean).join(" | ") || "Tabletop generation"}{" "}
-                - {new Date(tabletop.createdAt).toLocaleDateString()}
-              </p>
-            </div>
-          ))}
-        </div>
-      )}
-    </section>
   );
 }
 

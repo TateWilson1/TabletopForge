@@ -4,6 +4,53 @@ TabletopForge is an incident response tabletop exercise generator for small busi
 
 Tagline: Simple incident response tabletop exercises for real-world readiness.
 
+## What It Does
+
+TabletopForge runs a realistic cyber incident with a whole team in under an hour and produces an after-action report that leadership, auditors, and insurers can use.
+
+- **Live, role-based simulation.** Alerts, emails, calls, ransom notes, and reporter inquiries arrive the way they really do. Some go only to one role, so the team has to brief each other.
+- **Decisions with consequences.** Every decision has a role that owns it. The team votes, the owner commits, and weak choices trigger follow-on events (the ransomware reaches the backups, the regulator writes in).
+- **Team rooms.** The facilitator opens a room and shares a six-character code. Participants join from their own devices without an account.
+- **After-action report.** Readiness score, capability scores, prioritized findings with owners and due dates, decision log, NIST CSF 2.0 mapping, and an evidence statement. Export to PDF (print), Markdown, or JSON.
+- **Works without AI.** A curated library covers all eight scenario types, tailored by industry, size, maturity, and duration. When AI is enabled it writes organization-specific simulations, curveballs, and the executive analysis, and falls back to the library on any failure.
+- **Try it:** `/demo` plays a full exercise in the browser with no account and no backend.
+
+## Architecture
+
+| Piece | Where | Notes |
+| --- | --- | --- |
+| Frontend | `app/`, `components/`, `lib/` | Next.js static export, hosted on GitHub Pages |
+| API | `backend/src/server.js`, `backend/src/rooms.js` | Express on Azure App Service; accounts, entitlements, Stripe, OpenAI, team rooms |
+| Simulation engine | `backend/src/sim/` | Pure ES modules shared by the API (authoritative rooms) and the browser (solo and demo play) |
+| Database | PostgreSQL | Bootstrapped idempotently at startup; `prisma/` mirrors the schema |
+
+Team rooms keep their state in one PostgreSQL row, mutated under a row lock. Clients poll a versioned endpoint every two seconds, so there are no websockets, sticky sessions, or extra services to run.
+
+## Testing
+
+```bash
+npm run lint && npm run typecheck      # frontend
+cd backend && npm test                 # engine tests; API tests need TEST_DATABASE_URL
+```
+
+API integration tests run against a real PostgreSQL database and **drop its public schema**, so use a throwaway database:
+
+```bash
+TEST_DATABASE_URL=postgresql://user:pass@localhost:5432/ttf_test npm test
+```
+
+`npm run e2e` drives a full team exercise in real browsers (facilitator plus two participants). It needs the static build served at `APP_URL` and the backend at `API_URL` with screen login codes enabled.
+
+## Plans
+
+| | Free trial | Single exercise | Subscription |
+| --- | --- | --- | --- |
+| Tailored exercises | 1 | +1 per purchase | `TABLETOPFORGE_SUBSCRIPTION_MONTHLY_LIMIT` per month (default 10) |
+| Team room size | 5 | 5 | 30 |
+| AI curveballs and report analysis | – | – | Included |
+
+Prices are shown on `/pricing` only when `NEXT_PUBLIC_PRICE_TABLETOP` and `NEXT_PUBLIC_PRICE_SUBSCRIPTION` are set at build time, so the page cannot drift from Stripe.
+
 ## Overview
 
 TabletopForge is being built as a public SaaS website, not a private access-code tool. Users should be able to create an account, log in, receive one free tabletop generation, and then continue by buying individual tabletop generation credits or subscribing for more generation access.
@@ -92,6 +139,7 @@ Completed foundation:
 Next setup steps:
 
 - Add a long random `TABLETOPFORGE_AUTH_SECRET` in Azure App Service settings.
+- Set `STRIPE_WEBHOOK_SECRET`. In production, unsigned webhook events are rejected.
 - Configure email verification with `TABLETOPFORGE_AUTH_DELIVERY_MODE="email"`, `RESEND_API_KEY`, and `TABLETOPFORGE_AUTH_FROM_EMAIL`.
 - Keep `TABLETOPFORGE_AUTH_DELIVERY_MODE="screen"` and `TABLETOPFORGE_ALLOW_SCREEN_CODES="true"` for local testing only, never for the public SaaS backend.
 - Add your owner email to `TABLETOPFORGE_ADMIN_EMAILS` before using the unlinked operations console.

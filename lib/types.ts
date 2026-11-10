@@ -90,6 +90,8 @@ export interface GeneratedExercise {
   lessonsLearnedTemplate?: LessonsLearnedItem[];
   executiveSummary: string;
   markdownReport: string;
+  /** Live, role-based simulation (tabletopforge.sim.v1). Validated with normalizeSimulation before use. */
+  simulation?: unknown;
 }
 
 export interface StarterIrpTemplate {

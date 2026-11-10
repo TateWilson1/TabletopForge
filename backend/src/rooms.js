@@ -126,7 +126,7 @@ export function registerRoomRoutes(app, deps) {
     if (session.user.id !== room.ownerUserId) {
       throw fail(403, "Only the facilitator who created this room can do that.");
     }
-    return { kind: "facilitator", userId: session.user.id };
+    return { kind: "facilitator", userId: session.user.id, user: session.user };
   }
 
   async function loadRoom(roomId, client = requirePool(), { forUpdate = false } = {}) {
@@ -397,8 +397,9 @@ export function registerRoomRoutes(app, deps) {
         throw fail(403, "Only the facilitator can do that.");
       }
 
+      const actor = viewer.kind === "participant" ? viewer : { kind: "facilitator" };
       const { room } = await mutateRoom(roomId, (locked) => ({
-        state: applyAction(locked.simulationJson, locked.stateJson, action, viewer),
+        state: applyAction(locked.simulationJson, locked.stateJson, action, actor),
       }));
 
       if (action.type === "removeParticipant" && UUID_PATTERN.test(action.participantId ?? "")) {
@@ -435,6 +436,9 @@ export function registerRoomRoutes(app, deps) {
     const viewer = await resolveViewer(request, head);
     if (viewer.kind !== "facilitator") {
       throw fail(403, "Only the facilitator can use AI assists.");
+    }
+    if (!ai.isIncluded(viewer.user)) {
+      throw fail(402, "AI curveballs and analysis are included with a subscription.", "PAYMENT_REQUIRED");
     }
     if (!ai.consumeDailyRequest()) {
       throw fail(429, "Daily AI request limit reached.");

@@ -356,6 +356,10 @@ describe("TabletopForge API", { skip: TEST_DATABASE_URL ? false : "TEST_DATABASE
     };
 
     assert.equal((await api("POST", `/api/rooms/${room.id}/curveball`, { roomToken: seat.data.participantToken, body: {} })).status, 403);
+    // AI assists are a subscription feature.
+    assert.equal((await api("POST", `/api/rooms/${room.id}/curveball`, { token: facilitator.token, body: {} })).status, 402);
+    await pool.query(`UPDATE "users" SET "subscriptionStatus" = 'active', "billingPlan" = 'subscription' WHERE "id" = $1`, [facilitator.id]);
+    assert.equal((await api("GET", "/api/me", { token: facilitator.token })).data.entitlements.maxRoomParticipants, 30);
     const curveball = await api("POST", `/api/rooms/${room.id}/curveball`, { token: facilitator.token, body: { hint: "insurance" } });
     assert.equal(curveball.status, 200);
     assert.equal(curveball.data.view.feed.at(-1).title, "Insurer hotline calls back");

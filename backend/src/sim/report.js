@@ -147,7 +147,7 @@ export function buildAfterActionReport(sim, state, { now = Date.now(), exerciseI
       observation:
         decision.quality === "undecided"
           ? `The team did not reach a decision when "${decision.trigger}" landed.`
-          : `The team chose to ${lowerFirst(stripPeriod(decision.chosen))}. ${decision.consequence}`,
+          : `The team chose: "${stripPeriod(decision.chosen)}." ${decision.consequence}`,
       recommendation: decision.recommendation || (decision.strongerOption ? `Stronger response: ${decision.strongerOption}` : ""),
       owner: decision.owner,
       dueInDays: severity === "High" ? 30 : 60,
