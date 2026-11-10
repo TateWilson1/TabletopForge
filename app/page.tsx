@@ -88,7 +88,7 @@ export default function HomePage() {
           </h1>
           <p className="mt-5 max-w-2xl text-lg leading-8 text-muted-foreground">
             TabletopForge runs a realistic cyber incident with your whole team in under an hour. Each person plays their real role, decisions have consequences,
-            and you leave with an after-action report your auditor and insurer will accept.
+            and you leave with an after-action report you can hand to your auditor and insurer.
           </p>
           <div className="mt-8 flex flex-col gap-3 sm:flex-row">
             <Button asChild size="lg">
