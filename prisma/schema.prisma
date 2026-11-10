@@ -127,6 +127,7 @@ model LoginCode {
   createdAt DateTime  @default(now())
   expiresAt DateTime
   usedAt    DateTime?
+  attempts  Int       @default(0)
 
   @@index([email])
   @@index([userId])
@@ -155,8 +156,8 @@ model UploadedFile {
 
 model AiRun {
   id              String    @id @default(uuid()) @db.Uuid
-  tabletopId      String    @db.Uuid
-  tabletop        Tabletop  @relation(fields: [tabletopId], references: [id], onDelete: Cascade)
+  tabletopId      String?   @db.Uuid
+  tabletop        Tabletop? @relation(fields: [tabletopId], references: [id], onDelete: Cascade)
   userId          String?   @db.Uuid
   user            User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
   model           String
@@ -202,4 +203,37 @@ model DeletionLog {
   @@index([tabletopId])
   @@index([status])
   @@map("deletion_logs")
+}
+
+model ExerciseRoom {
+  id              String            @id @default(uuid()) @db.Uuid
+  joinCode        String            @unique
+  ownerUserId     String            @db.Uuid
+  tabletopId      String?           @db.Uuid
+  title           String
+  status          String            @default("lobby")
+  simulationJson  Json
+  stateJson       Json
+  reportJson      Json?
+  version         Int               @default(1)
+  maxParticipants Int               @default(5)
+  aiCalls         Int               @default(0)
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @default(now())
+  endedAt         DateTime?
+  participants    RoomParticipant[]
+
+  @@index([ownerUserId])
+  @@map("exercise_rooms")
+}
+
+model RoomParticipant {
+  id        String       @id @default(uuid()) @db.Uuid
+  roomId    String       @db.Uuid
+  room      ExerciseRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  tokenHash String       @unique
+  createdAt DateTime     @default(now())
+
+  @@index([roomId])
+  @@map("room_participants")
 }

@@ -6,9 +6,9 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "check": "node --check src/server.js",
+    "check": "node --check src/server.js && node --check src/rooms.js",
     "build": "npm run check",
-    "test": "npm run check"
+    "test": "node --test --test-reporter=spec \"test/*.test.js\""
   },
   "dependencies": {
     "cors": "^2.8.5",

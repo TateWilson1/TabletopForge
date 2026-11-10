@@ -5,6 +5,11 @@ import express from "express";
 import OpenAI from "openai";
 import pg from "pg";
 import Stripe from "stripe";
+import { pathToFileURL } from "node:url";
+import { ROOM_SCHEMA_STATEMENTS, registerRoomRoutes } from "./rooms.js";
+import { rateLimit, securityHeaders } from "./security.js";
+import { SIMULATION_SYSTEM_PROMPT, buildSimulationPrompt, parseAiSimulation, simulationSchema } from "./sim/ai.js";
+import { buildLibrarySimulation } from "./sim/library.js";
 
 const { Pool } = pg;
 
@@ -18,10 +23,26 @@ const ACTIVE_SUBSCRIPTION_STATUSES = new Set(["active", "trialing"]);
 const SESSION_DAYS = 30;
 const LOGIN_CODE_MINUTES = 15;
 const DEFAULT_SUBSCRIPTION_MONTHLY_LIMIT = 10;
+const MAX_LOGIN_CODE_ATTEMPTS = 5;
+const ROOM_PARTICIPANT_LIMITS = { free: 5, paid: 30 };
+const MAX_AI_CALLS_PER_ROOM = 8;
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// Created lazily so the API can boot (accounts, billing, rooms) before an OpenAI key exists.
+let openaiClient = null;
+const openai = {
+  responses: {
+    create(parameters) {
+      if (app.locals.openai) {
+        return app.locals.openai.responses.create(parameters);
+      }
+      openaiClient = openaiClient ?? new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+      return openaiClient.responses.create(parameters);
+    },
+  },
+};
+const generationsInFlight = new Set();
 const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
 const pool = process.env.DATABASE_URL
   ? new Pool({
@@ -40,6 +61,31 @@ let databaseBootstrapStatus = {
   ok: false,
   error: "",
 };
+
+// Azure App Service terminates TLS in front of the app; trust one proxy hop for client IPs.
+app.set("trust proxy", 1);
+app.disable("x-powered-by");
+app.use(securityHeaders);
+
+const authIpLimiter = rateLimit("auth-ip", { limit: 30, windowMs: 10 * 60 * 1000 });
+const emailKey = (request) => normalizeEmail(request.body?.email);
+const codeRequestLimiter = rateLimit("auth-code-request", {
+  limit: 5,
+  windowMs: 15 * 60 * 1000,
+  keyFn: emailKey,
+  message: "Too many codes requested for this email. Wait a few minutes and try again.",
+});
+const credentialLimiter = rateLimit("auth-credential", {
+  limit: 10,
+  windowMs: 15 * 60 * 1000,
+  keyFn: emailKey,
+  message: "Too many attempts for this account. Wait a few minutes and try again.",
+});
+const aiUserLimiter = rateLimit("ai-user", {
+  limit: 60,
+  windowMs: 60 * 60 * 1000,
+  keyFn: (request) => getBearerToken(request) || request.get("x-tabletopforge-ai-access-code") || "",
+});
 
 app.post("/api/billing/stripe-webhook", express.raw({ type: "application/json" }), async (request, response) => {
   try {
@@ -66,7 +112,7 @@ app.use(
 
       callback(new Error("Origin is not allowed by CORS."));
     },
-    allowedHeaders: ["Content-Type", "Authorization", "x-tabletopforge-ai-access-code"],
+    allowedHeaders: ["Content-Type", "Authorization", "x-tabletopforge-ai-access-code", "x-room-token"],
   }),
 );
 
@@ -86,7 +132,7 @@ app.get("/health", async (request, response) => {
   });
 });
 
-app.post("/api/auth/request-code", async (request, response) => {
+app.post("/api/auth/request-code", authIpLimiter, codeRequestLimiter, async (request, response) => {
   try {
     requireDatabase();
     const email = normalizeEmail(request.body?.email);
@@ -123,7 +169,7 @@ app.post("/api/auth/request-code", async (request, response) => {
   }
 });
 
-app.post("/api/auth/verify-code", async (request, response) => {
+app.post("/api/auth/verify-code", authIpLimiter, credentialLimiter, async (request, response) => {
   try {
     requireDatabase();
     const email = normalizeEmail(request.body?.email);
@@ -134,8 +180,8 @@ app.post("/api/auth/verify-code", async (request, response) => {
       return;
     }
 
-    const loginCode = await findUsableLoginCode(email);
-    if (!loginCode || loginCode.codeHash !== hashSecret(`${email}:${code}`)) {
+    const loginCode = await verifyLoginCodeAttempt(email, code);
+    if (!loginCode) {
       response.status(401).json({ error: "Invalid or expired login code." });
       return;
     }
@@ -155,7 +201,7 @@ app.post("/api/auth/verify-code", async (request, response) => {
   }
 });
 
-app.post("/api/auth/password-register", async (request, response) => {
+app.post("/api/auth/password-register", authIpLimiter, credentialLimiter, async (request, response) => {
   try {
     requireDatabase();
     const email = normalizeEmail(request.body?.email);
@@ -173,8 +219,8 @@ app.post("/api/auth/password-register", async (request, response) => {
       return;
     }
 
-    const loginCode = await findUsableLoginCode(email);
-    if (!loginCode || loginCode.codeHash !== hashSecret(`${email}:${code}`)) {
+    const loginCode = await verifyLoginCodeAttempt(email, code);
+    if (!loginCode) {
       response.status(401).json({ error: "Invalid or expired verification code." });
       return;
     }
@@ -201,7 +247,7 @@ app.post("/api/auth/password-register", async (request, response) => {
   }
 });
 
-app.post("/api/auth/password-login", async (request, response) => {
+app.post("/api/auth/password-login", authIpLimiter, credentialLimiter, async (request, response) => {
   try {
     requireDatabase();
     const email = normalizeEmail(request.body?.email);
@@ -454,6 +500,29 @@ app.get("/api/tabletops", async (request, response) => {
   }
 });
 
+app.get("/api/tabletops/:id", async (request, response) => {
+  try {
+    const session = await authenticateRequest(request);
+    if (!/^[0-9a-f-]{36}$/i.test(request.params.id)) {
+      response.status(404).json({ error: "Tabletop not found." });
+      return;
+    }
+    const result = await dbQuery(
+      `SELECT "id", "title", "exerciseJson", "createdAt"
+       FROM "tabletops"
+       WHERE "id" = $1 AND "userId" = $2 AND "deletedAt" IS NULL`,
+      [request.params.id, session.user.id],
+    );
+    if (result.rowCount === 0 || !result.rows[0].exerciseJson) {
+      response.status(404).json({ error: "Tabletop not found." });
+      return;
+    }
+    response.json({ tabletopId: result.rows[0].id, title: result.rows[0].title, exercise: result.rows[0].exerciseJson });
+  } catch (error) {
+    sendAuthError(response, error);
+  }
+});
+
 app.post("/api/tabletops/generate", async (request, response) => {
   try {
     const session = await authenticateRequest(request);
@@ -493,6 +562,7 @@ app.post("/api/tabletops/generate", async (request, response) => {
 });
 
 app.post("/api/tabletops/generate-ai", async (request, response) => {
+  let lockedUserId = "";
   try {
     const session = await authenticateRequest(request);
     const configError = validateAiConfig();
@@ -513,6 +583,14 @@ app.post("/api/tabletops/generate-ai", async (request, response) => {
     }
 
     await assertGenerationEntitlement(session.user.id);
+
+    // One generation at a time per account: parallel requests must not share a single credit.
+    if (generationsInFlight.has(session.user.id)) {
+      response.status(409).json({ error: "A tabletop is already being generated for this account." });
+      return;
+    }
+    generationsInFlight.add(session.user.id);
+    lockedUserId = session.user.id;
 
     const model = process.env.OPENAI_MODEL || DEFAULT_MODEL;
     const generatedAt = new Date().toISOString();
@@ -540,6 +618,8 @@ app.post("/api/tabletops/generate-ai", async (request, response) => {
     });
 
     let exercise = parseAiGeneratedExercise(aiResponse.output_text, options, generatedAt);
+    const simulationResult = await generateSimulation(options, exercise, model);
+    exercise.simulation = simulationResult.simulation;
     const title = buildTabletopTitle(exercise, options);
     const tabletop = await consumeGenerationEntitlement(session.user.id, {
       title,
@@ -565,12 +645,13 @@ app.post("/api/tabletops/generate-ai", async (request, response) => {
       model,
       promptType: "tabletop_generation",
       status: "completed",
-      inputTokens: aiResponse.usage?.input_tokens ?? null,
-      outputTokens: aiResponse.usage?.output_tokens ?? null,
+      inputTokens: (aiResponse.usage?.input_tokens ?? 0) + simulationResult.inputTokens,
+      outputTokens: (aiResponse.usage?.output_tokens ?? 0) + simulationResult.outputTokens,
       resultJson: {
         scenario: exercise.overview.scenario,
         maturityLevel: exercise.overview.maturityLevel,
         hasIrpAnalysis: Boolean(exercise.irpAnalysis),
+        simulationSource: exercise.simulation.source,
       },
     });
 
@@ -592,6 +673,10 @@ app.post("/api/tabletops/generate-ai", async (request, response) => {
 
     console.error("AI tabletop generation failed", error);
     sendAuthError(response, error);
+  } finally {
+    if (lockedUserId) {
+      generationsInFlight.delete(lockedUserId);
+    }
   }
 });
 
@@ -660,7 +745,7 @@ app.post("/api/billing/create-checkout-session", async (request, response) => {
   }
 });
 
-app.post("/api/ai/generate-inject", async (request, response) => {
+app.post("/api/ai/generate-inject", aiUserLimiter, async (request, response) => {
   const configError = validateAiConfig();
   if (configError) {
     response.status(503).json({ error: configError });
@@ -725,7 +810,7 @@ app.post("/api/ai/generate-inject", async (request, response) => {
   }
 });
 
-app.post("/api/ai/assist", async (request, response) => {
+app.post("/api/ai/assist", aiUserLimiter, async (request, response) => {
   const configError = validateAiConfig();
   if (configError) {
     response.status(503).json({ error: configError });
@@ -788,15 +873,83 @@ app.post("/api/ai/assist", async (request, response) => {
   }
 });
 
+registerRoomRoutes(app, {
+  getPool: () => pool,
+  authenticateRequest,
+  hashSecret,
+  getBearerToken,
+  getRoomParticipantLimit: async (user) => buildEntitlements(user).maxRoomParticipants,
+  ai: {
+    maxCallsPerRoom: MAX_AI_CALLS_PER_ROOM,
+    validateConfig: validateAiConfig,
+    consumeDailyRequest,
+    async complete({ system, payload, schemaName, schema }) {
+      const model = process.env.OPENAI_MODEL || DEFAULT_MODEL;
+      const aiResponse = await openai.responses.create({
+        model,
+        input: [
+          { role: "system", content: system },
+          { role: "user", content: JSON.stringify(payload) },
+        ],
+        text: { format: { type: "json_schema", name: schemaName, strict: true, schema } },
+      });
+      return {
+        model,
+        outputText: aiResponse.output_text,
+        usage: { inputTokens: aiResponse.usage?.input_tokens ?? null, outputTokens: aiResponse.usage?.output_tokens ?? null },
+      };
+    },
+    recordRun: ({ userId, promptType, status, model, usage, errorMessage }) =>
+      recordAiRun({
+        tabletopId: null,
+        userId,
+        model: model || process.env.OPENAI_MODEL || DEFAULT_MODEL,
+        promptType,
+        status,
+        inputTokens: usage?.inputTokens ?? null,
+        outputTokens: usage?.outputTokens ?? null,
+        resultJson: null,
+        errorMessage,
+      }),
+  },
+});
+
 app.use((_request, response) => {
   response.status(404).json({ error: "Not found." });
 });
 
-await ensureSaasSchema();
-
-app.listen(port, () => {
-  console.log(`TabletopForge backend listening on port ${port}`);
+// Last-resort handler: never leak stack traces, always answer in JSON.
+app.use((error, _request, response, _next) => {
+  if (error?.message === "Origin is not allowed by CORS.") {
+    response.status(403).json({ error: "Origin is not allowed." });
+    return;
+  }
+  if (error?.type === "entity.too.large") {
+    response.status(413).json({ error: "Request is too large." });
+    return;
+  }
+  if (error?.type === "entity.parse.failed") {
+    response.status(400).json({ error: "Request body is not valid JSON." });
+    return;
+  }
+  console.error("Unhandled request error", error);
+  response.status(500).json({ error: "Request failed." });
 });
+
+export { app, ensureSaasSchema, pool };
+
+const isMainModule = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMainModule) {
+  if (isHostedProduction() && !process.env.TABLETOPFORGE_AUTH_SECRET) {
+    console.warn("TABLETOPFORGE_AUTH_SECRET is not set. Set a long random value; sessions currently depend on a fallback key.");
+  }
+
+  await ensureSaasSchema();
+
+  app.listen(port, () => {
+    console.log(`TabletopForge backend listening on port ${port}`);
+  });
+}
 
 const injectSchema = {
   type: "object",
@@ -1012,6 +1165,36 @@ function getAdminEmails() {
     .filter(Boolean);
 }
 
+// Builds the live simulation for a generated tabletop. The curated library version is always
+// available, so an AI failure here degrades quality instead of failing a paid generation.
+async function generateSimulation(options, exercise, model) {
+  const fallback = buildLibrarySimulation({
+    ...options,
+    knownRoles: exercise?.irpAnalysis?.organizationStructure?.detectedRoles ?? extractStructureRoles(options.organizationStructure),
+    seed: exercise?.generatedAt,
+  });
+
+  try {
+    const aiResponse = await openai.responses.create({
+      model,
+      max_output_tokens: 20000,
+      input: [
+        { role: "system", content: SIMULATION_SYSTEM_PROMPT },
+        { role: "user", content: JSON.stringify(buildSimulationPrompt(options, fallback, exercise)) },
+      ],
+      text: { format: { type: "json_schema", name: "tabletop_simulation", strict: true, schema: simulationSchema } },
+    });
+    return {
+      simulation: parseAiSimulation(aiResponse.output_text, fallback) ?? fallback,
+      inputTokens: aiResponse.usage?.input_tokens ?? 0,
+      outputTokens: aiResponse.usage?.output_tokens ?? 0,
+    };
+  } catch (error) {
+    console.error("AI simulation generation failed; using the curated library simulation.", error);
+    return { simulation: fallback, inputTokens: 0, outputTokens: 0 };
+  }
+}
+
 async function consumeGenerationEntitlement(userId, { title, generationSource, exercise, metadata = {} }) {
   const client = await pool.connect();
 
@@ -1217,13 +1400,31 @@ async function findUsableLoginCode(email) {
   const result = await dbQuery(
     `SELECT "id", "email", "userId", "codeHash", "expiresAt"
      FROM "login_codes"
-     WHERE "email" = $1 AND "usedAt" IS NULL AND "expiresAt" > NOW()
+     WHERE "email" = $1 AND "usedAt" IS NULL AND "expiresAt" > NOW() AND "attempts" < $2
      ORDER BY "createdAt" DESC
      LIMIT 1`,
-    [email],
+    [email, MAX_LOGIN_CODE_ATTEMPTS],
   );
 
   return result.rows[0] ?? null;
+}
+
+// Returns the login code row when `code` matches. Every wrong guess is counted in the database,
+// and a code is dead after MAX_LOGIN_CODE_ATTEMPTS, so a 6-digit code cannot be brute-forced.
+async function verifyLoginCodeAttempt(email, code) {
+  const loginCode = await findUsableLoginCode(email);
+  if (!loginCode) {
+    return null;
+  }
+
+  const expected = Buffer.from(loginCode.codeHash, "hex");
+  const actual = Buffer.from(hashSecret(`${email}:${code}`), "hex");
+  if (expected.length === actual.length && crypto.timingSafeEqual(expected, actual)) {
+    return loginCode;
+  }
+
+  await dbQuery(`UPDATE "login_codes" SET "attempts" = "attempts" + 1 WHERE "id" = $1`, [loginCode.id]);
+  return null;
 }
 
 async function createSession(userId) {
@@ -1264,6 +1465,10 @@ function buildStripeEvent(request) {
 
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
   if (!webhookSecret) {
+    // Unsigned events would let anyone grant themselves credits. Only tolerate them on a developer machine.
+    if (isHostedProduction()) {
+      throw new Error("STRIPE_WEBHOOK_SECRET is required to accept webhooks in production.");
+    }
     return JSON.parse(request.body.toString("utf8"));
   }
 
@@ -1384,6 +1589,8 @@ function buildEntitlements(user, subscriptionGenerationsUsedThisMonth = 0) {
     subscriptionGenerationsRemainingThisMonth,
     subscriptionStatus,
     billingPlan: user.billingPlan ?? "free",
+    maxRoomParticipants: hasActiveSubscription ? ROOM_PARTICIPANT_LIMITS.paid : ROOM_PARTICIPANT_LIMITS.free,
+    aiFeatureEnabled: isAiFeatureEnabled(),
   };
 }
 
@@ -1652,6 +1859,13 @@ async function ensureSaasSchema() {
       END IF;
     END $$`,
   ];
+
+  statements.push(
+    `ALTER TABLE "login_codes" ADD COLUMN IF NOT EXISTS "attempts" INTEGER NOT NULL DEFAULT 0`,
+    // AI assists inside a live room are not tied to a stored tabletop.
+    `ALTER TABLE "ai_runs" ALTER COLUMN "tabletopId" DROP NOT NULL`,
+    ...ROOM_SCHEMA_STATEMENTS,
+  );
 
   try {
     for (const statement of statements) {
