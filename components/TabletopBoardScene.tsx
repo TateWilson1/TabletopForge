@@ -1,65 +1,134 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import * as CANNON from "cannon-es";
 import * as THREE from "three";
-import { boardSpaceCount, pawnOptions, type CyberBoardSpace, type PawnKey, type PawnOption } from "@/components/tabletop-board-config";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
+import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
+import { addScenarioSpinner, getScenarioAccentColor } from "@/components/board-set-pieces";
+import {
+  HOP_MS,
+  pawnOptions,
+  spaceEffects,
+  toneMeta,
+  type BoardNode,
+  type BoardSpaceTone,
+  type DiceRoll,
+  type PawnKey,
+  type PawnOption,
+} from "@/components/tabletop-board-config";
+
+export type CameraMode = "follow" | "overview" | "top";
+
+export interface DeckDraw {
+  nonce: number;
+  deck: "prompt" | "inject";
+}
+
+export interface PawnMove {
+  nonce: number;
+  /** Node ids to hop through, in order. */
+  path: number[];
+  /** Steps still owed after this path (non-zero when pausing at a fork). */
+  stepsAfter: number;
+}
+
+interface TabletopBoardSceneProps {
+  pawn: PawnKey;
+  nodes: BoardNode[];
+  move: PawnMove | null;
+  dice: DiceRoll | null;
+  diceReady: boolean;
+  junction: number[] | null;
+  deckDraw: DeckDraw | null;
+  resetNonce: number;
+  cameraMode: CameraMode;
+  sceneTitle?: string;
+  sceneSubtitle?: string;
+  onDiceClick?: () => void;
+  onJunctionPick?: (nodeId: number) => void;
+  onHop?: (step: number) => void;
+  onLand?: (nodeId: number) => void;
+}
+
+/* ------------------------------------------------------------------ */
+/* Layout                                                              */
+/* ------------------------------------------------------------------ */
+
+const SPACE_Y = 0.16;
+const SPACE_RADIUS = 0.5;
+const FOLLOW_OFFSET = new THREE.Vector3(0, 7.2, 7.8);
+const OVERVIEW_TARGET = new THREE.Vector3(0, 0, 0.6);
+const OVERVIEW_CAMERA = new THREE.Vector3(0, 15.5, 15.5);
+const TOP_CAMERA = new THREE.Vector3(0, 22, 1.2);
+const FONT = '"Segoe UI", "Helvetica Neue", Arial, sans-serif';
+const SPIN_MS = 1050;
+const SETTLE_MS = 420;
+const DECK_SLOTS = {
+  prompt: { x: -1.75, z: 0.9, rotation: 0.22 },
+  inject: { x: 1.75, z: 0.9, rotation: -0.22 },
+} as const;
+
+/* ------------------------------------------------------------------ */
+/* Component                                                           */
+/* ------------------------------------------------------------------ */
+
+interface HoverInfo {
+  nodeId: number;
+  x: number;
+  y: number;
+}
+
+interface SceneState {
+  renderer: THREE.WebGLRenderer;
+  scene: THREE.Scene;
+  camera: THREE.PerspectiveCamera;
+  controls: OrbitControls;
+  nodes: BoardNode[];
+  spaceMeshes: THREE.Mesh[];
+  pawnGroup: THREE.Group;
+  pawnShadow: THREE.Mesh;
+  ring: THREE.Mesh;
+  counter: CounterSprite;
+  dice: FloatingDice;
+  arrows: THREE.Group[];
+  decks: Record<"prompt" | "inject", DeckRig>;
+  effects: Effect[];
+  hop: HopState;
+  cameraTween: CameraTween | null;
+  cameraMode: CameraMode;
+  ambient: Ambient;
+  animationId: number;
+}
 
 export function TabletopBoardScene({
   pawn,
-  boardSpaces,
-  positionIndex,
-  rollNonce,
-  rollResult,
-  isRolling,
+  nodes,
+  move,
+  dice,
+  diceReady,
+  junction,
+  deckDraw,
+  resetNonce,
+  cameraMode,
   sceneTitle = "Incident Response",
   sceneSubtitle = "TabletopForge",
-  sceneIndustry = "General",
-  sceneOrganizationSize = "Team",
-}: {
-  pawn: PawnKey;
-  boardSpaces: CyberBoardSpace[];
-  positionIndex: number;
-  rollNonce: number;
-  rollResult: number;
-  isRolling: boolean;
-  sceneTitle?: string;
-  sceneSubtitle?: string;
-  sceneIndustry?: string;
-  sceneOrganizationSize?: string;
-}) {
+  onDiceClick,
+  onJunctionPick,
+  onHop,
+  onLand,
+}: TabletopBoardSceneProps) {
   const mountRef = useRef<HTMLDivElement | null>(null);
-  const isRollingRef = useRef(isRolling);
-  const positionIndexRef = useRef(positionIndex);
+  const stateRef = useRef<SceneState | null>(null);
+  const callbacksRef = useRef({ onDiceClick, onJunctionPick, onHop, onLand, diceReady });
+  const initialPawnRef = useRef(pawn);
   const [sceneError, setSceneError] = useState("");
-  const sceneRef = useRef<{
-    renderer: THREE.WebGLRenderer;
-    scene: THREE.Scene;
-    camera: THREE.PerspectiveCamera;
-    world: CANNON.World;
-    diceBody: CANNON.Body;
-    diceMesh: THREE.Object3D;
-    pawnBody: CANNON.Body;
-    pawnGroup: THREE.Group;
-    pawnTarget: THREE.Vector3;
-    highlightRing: THREE.Mesh;
-    pawnSpotlight: THREE.SpotLight;
-    spotlightTarget: THREE.Object3D;
-    revealCardGroup: THREE.Group;
-    revealCardStart: number;
-    sparkleField: THREE.Points;
-    scenarioSetPiece: THREE.Group;
-    tileMeshes: THREE.Mesh[];
-    animationId: number;
-  } | null>(null);
+  const [hover, setHover] = useState<HoverInfo | null>(null);
+  const [cursor, setCursor] = useState<"grab" | "pointer">("grab");
 
   useEffect(() => {
-    isRollingRef.current = isRolling;
-  }, [isRolling]);
-
-  useEffect(() => {
-    positionIndexRef.current = positionIndex;
-  }, [positionIndex]);
+    callbacksRef.current = { onDiceClick, onJunctionPick, onHop, onLand, diceReady };
+  });
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -67,261 +136,437 @@ export function TabletopBoardScene({
       return;
     }
     const mountElement = mount;
+    const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 
     let renderer: THREE.WebGLRenderer;
     try {
-      renderer = new THREE.WebGLRenderer({
-        antialias: true,
-        alpha: true,
-        powerPreference: "high-performance",
-      });
+      renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
     } catch {
       setSceneError("3D rendering is unavailable on this device or browser.");
       return;
     }
 
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.45));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.08;
-    mountElement.appendChild(renderer.domElement);
+    renderer.toneMapping = THREE.NeutralToneMapping;
+    renderer.toneMappingExposure = 1.0;
+    const canvas = renderer.domElement;
+    canvas.style.display = "block";
+    canvas.style.width = "100%";
+    canvas.style.height = "100%";
+    canvas.style.touchAction = "none";
+    mountElement.appendChild(canvas);
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0b1117);
-    scene.fog = new THREE.Fog(0x0b1117, 9.5, 23);
+    scene.background = createSkyTexture();
+    scene.fog = new THREE.Fog(0xdcd0ff, 34, 70);
 
-    const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 100);
-    camera.position.set(0, 8.4, 13.4);
-    camera.lookAt(0, 0, 0);
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    const environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    scene.environment = environment;
+    scene.environmentIntensity = 0.55;
+    pmrem.dispose();
 
-    const world = new CANNON.World({
-      gravity: new CANNON.Vec3(0, -9.82, 0),
-    });
-    world.broadphase = new CANNON.SAPBroadphase(world);
+    const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 140);
+    const startNode = nodes[0];
+    camera.position.set(0, 26, 24);
+    const controls = new OrbitControls(camera, canvas);
+    controls.target.copy(OVERVIEW_TARGET);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.minDistance = 5;
+    controls.maxDistance = 30;
+    controls.maxPolarAngle = 1.32;
+    controls.screenSpacePanning = false;
+    controls.rotateSpeed = 0.6;
+    controls.zoomSpeed = 0.8;
 
     addLighting(scene);
-    addRoom(scene);
-    addTable(scene);
-    addTabletopDetails(scene);
-    addGameBoard(scene, sceneTitle, sceneSubtitle);
-    const tileMeshes = addBoardSpaces(scene, boardSpaces);
-    addBoardTrackDecorations(scene, boardSpaces);
-    addCardDecks(scene);
-    addGameTokens(scene);
-    const scenarioSetPiece = addScenarioSetPiece(scene, sceneTitle, sceneIndustry);
-    addParticipantSeats(scene, sceneOrganizationSize);
+    addIsland(scene);
+    addPaths(scene, nodes);
+    const spaceMeshes = addSpaces(scene, nodes);
+    addLandmarks(scene);
+    const ambient = addDecor(scene);
+    addCenterpiece(scene, sceneTitle, sceneSubtitle, ambient);
+    const anisotropy = renderer.capabilities.getMaxAnisotropy();
+    const decks = {
+      prompt: createDeck(scene, "prompt", anisotropy),
+      inject: createDeck(scene, "inject", anisotropy),
+    };
 
-    const highlightRing = createHighlightRing();
-    highlightRing.position.copy(getBoardPosition(0).setY(0.245));
-    scene.add(highlightRing);
-
-    const spotlightTarget = new THREE.Object3D();
-    spotlightTarget.position.copy(highlightRing.position);
-    scene.add(spotlightTarget);
-
-    const pawnSpotlight = new THREE.SpotLight(0x23d39b, 1.35, 4.2, 0.54, 0.82, 1.2);
-    pawnSpotlight.position.set(0, 2.8, 0);
-    pawnSpotlight.target = spotlightTarget;
-    scene.add(pawnSpotlight);
-
-    const revealCardGroup = createRevealCard();
-    revealCardGroup.visible = false;
-    scene.add(revealCardGroup);
-
-    const sparkleField = createSparkleField();
-    scene.add(sparkleField);
-
-    const groundBody = new CANNON.Body({ mass: 0, shape: new CANNON.Box(new CANNON.Vec3(4.7, 0.08, 3.6)) });
-    groundBody.position.set(0, 0.18, 0);
-    world.addBody(groundBody);
-
-    const diceMesh = createD20Mesh();
-    diceMesh.position.set(4.06, 0.94, 0.28);
-    scene.add(diceMesh);
-
-    const diceBody = new CANNON.Body({ mass: 1.2, shape: new CANNON.Sphere(0.39), linearDamping: 0.32, angularDamping: 0.26 });
-    diceBody.position.set(4.06, 0.94, 0.28);
-    world.addBody(diceBody);
-
-    const pawnGroup = createPawnMesh(pawnOptions[0]);
-    const pawnTarget = getBoardPosition(0).clone().setY(0.5);
-    pawnGroup.position.copy(pawnTarget);
+    const pawnGroup = createPawnMesh(pawnOptions.find((option) => option.key === initialPawnRef.current) ?? pawnOptions[0]);
+    pawnGroup.position.set(startNode.x, SPACE_Y, startNode.z);
+    pawnGroup.rotation.y = facingBetween(startNode, nodes[startNode.next[0]]);
     scene.add(pawnGroup);
 
-    const pawnBody = new CANNON.Body({
-      mass: 0.9,
-      shape: new CANNON.Sphere(0.23),
-      linearDamping: 0.66,
-      angularDamping: 0.76,
-    });
-    pawnBody.position.set(pawnTarget.x, pawnTarget.y, pawnTarget.z);
-    world.addBody(pawnBody);
+    const pawnShadow = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1),
+      new THREE.MeshBasicMaterial({ map: createRadialTexture("rgba(40,20,60,0.55)", "rgba(40,20,60,0)"), transparent: true, depthWrite: false }),
+    );
+    pawnShadow.rotation.x = -Math.PI / 2;
+    pawnShadow.renderOrder = 1;
+    scene.add(pawnShadow);
 
-    function resize() {
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(0.56, 0.68, 48),
+      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, depthWrite: false }),
+    );
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.set(startNode.x, SPACE_Y + 0.01, startNode.z);
+    scene.add(ring);
+
+    const counter = createCounterSprite();
+    scene.add(counter.sprite);
+
+    const floatingDice = createFloatingDice(scene);
+
+    const resize = () => {
       const width = mountElement.clientWidth;
       const height = mountElement.clientHeight;
       renderer.setSize(width, height, false);
       camera.aspect = width / Math.max(1, height);
+      camera.fov = camera.aspect < 0.9 ? 56 : camera.aspect < 1.3 ? 46 : 40;
       camera.updateProjectionMatrix();
-    }
-
+    };
     resize();
     const resizeObserver = new ResizeObserver(resize);
     resizeObserver.observe(mountElement);
 
-    let previousFrameTime = performance.now();
-    let cameraIntro = 0;
-    const animate = () => {
-      const currentState = sceneRef.current;
-      if (!currentState) {
-        return;
-      }
+    /* ---------------- pointer interaction ---------------- */
+    const raycaster = new THREE.Raycaster();
+    const pointer = new THREE.Vector2();
+    let pointerDown: { x: number; y: number } | null = null;
+    let pendingPointer: PointerEvent | null = null;
 
-      const now = performance.now();
-      const elapsed = now / 1000;
-      const delta = Math.min((now - previousFrameTime) / 1000, 0.033);
-      previousFrameTime = now;
-      const pawnDelta = new CANNON.Vec3(
-        pawnTarget.x - pawnBody.position.x,
-        0,
-        pawnTarget.z - pawnBody.position.z,
-      );
-      const distanceToTarget = Math.hypot(pawnDelta.x, pawnDelta.z);
-      const diceSpeed = Math.hypot(diceBody.velocity.x, diceBody.velocity.y, diceBody.velocity.z);
-      const shouldSimulate = isRollingRef.current || distanceToTarget > 0.025 || diceSpeed > 0.04 || cameraIntro < 1;
-
-      if (shouldSimulate) {
-        world.step(1 / 60, delta, 2);
-        pawnBody.velocity.x = pawnDelta.x * 5.4;
-        pawnBody.velocity.z = pawnDelta.z * 5.4;
-        if (distanceToTarget > 0.08 && pawnBody.position.y < 0.5) {
-          pawnBody.velocity.y = 1.18;
+    const pick = (event: PointerEvent) => {
+      const state = stateRef.current;
+      const bounds = canvas.getBoundingClientRect();
+      pointer.x = ((event.clientX - bounds.left) / bounds.width) * 2 - 1;
+      pointer.y = -((event.clientY - bounds.top) / bounds.height) * 2 + 1;
+      raycaster.setFromCamera(pointer, camera);
+      let arrowNode = -1;
+      if (state && state.arrows.length > 0) {
+        const hit = raycaster.intersectObjects(state.arrows, true)[0];
+        if (hit) {
+          let object: THREE.Object3D | null = hit.object;
+          while (object && object.userData.nodeId === undefined) {
+            object = object.parent;
+          }
+          arrowNode = (object?.userData.nodeId as number | undefined) ?? -1;
         }
-      } else {
-        pawnBody.velocity.set(0, 0, 0);
       }
-
-      diceMesh.position.copy(cannonToThree(diceBody.position));
-      diceMesh.quaternion.copy(cannonQuatToThree(diceBody.quaternion));
-      currentState.pawnGroup.position.copy(cannonToThree(pawnBody.position));
-      currentState.pawnGroup.position.y += Math.sin(elapsed * 4.2) * 0.015;
-      currentState.pawnGroup.rotation.y += isRollingRef.current ? 0.025 : 0.006;
-
-      currentState.highlightRing.position.lerp(pawnTarget.clone().setY(0.245), 0.14);
-      currentState.highlightRing.rotation.z += 0.018;
-      currentState.highlightRing.scale.setScalar(1 + Math.sin(elapsed * 5.1) * 0.045);
-      currentState.spotlightTarget.position.copy(currentState.highlightRing.position);
-      currentState.pawnSpotlight.position.set(
-        currentState.highlightRing.position.x,
-        2.55 + Math.sin(elapsed * 3) * 0.12,
-        currentState.highlightRing.position.z,
-      );
-
-      currentState.sparkleField.rotation.y += delta * 0.16;
-      currentState.sparkleField.position.y = 0.18 + Math.sin(elapsed * 1.2) * 0.035;
-      currentState.scenarioSetPiece.rotation.y += delta * 0.32;
-      currentState.scenarioSetPiece.position.y = 0.42 + Math.sin(elapsed * 1.45) * 0.035;
-
-      animateTileMaterials(currentState.tileMeshes, positionIndexRef.current, elapsed);
-      animateRevealCard(currentState.revealCardGroup, currentState.revealCardStart, now);
-
-      cameraIntro = Math.min(1, cameraIntro + delta * 0.62);
-      const orbit = Math.sin(elapsed * 0.18) * 0.16;
-      const cameraTarget = isRollingRef.current
-        ? new THREE.Vector3(3.45, 5.1, 6.35)
-        : new THREE.Vector3(5.18 + orbit, 6.1, 8.35 - orbit * 0.6);
-      const cameraStart = new THREE.Vector3(0, 8.4, 13.4);
-      const introTarget = cameraStart.lerp(cameraTarget, easeOutCubic(cameraIntro));
-      camera.position.lerp(introTarget, cameraIntro < 1 ? 1 : 0.035);
-      camera.lookAt(0, 0.05, 0);
-
-      renderer.render(scene, camera);
-      currentState.animationId = window.requestAnimationFrame(animate);
+      const diceHit =
+        state !== null && state.dice.visible > 0.5 && raycaster.intersectObjects([state.dice.d6.group, state.dice.d20.group], true).length > 0;
+      const spaceHit = raycaster.intersectObjects(spaceMeshes, false)[0];
+      return {
+        arrowNode,
+        diceHit,
+        nodeId: spaceHit ? (spaceHit.object.userData.nodeId as number) : -1,
+        x: event.clientX - bounds.left,
+        y: event.clientY - bounds.top,
+      };
     };
 
-    sceneRef.current = {
+    const handlePointerMove = (event: PointerEvent) => {
+      pendingPointer = event;
+    };
+    const handlePointerLeave = () => {
+      pendingPointer = null;
+      setHover(null);
+      setCursor("grab");
+    };
+    const handlePointerDown = (event: PointerEvent) => {
+      pointerDown = { x: event.clientX, y: event.clientY };
+    };
+    const handlePointerUp = (event: PointerEvent) => {
+      if (!pointerDown) {
+        return;
+      }
+      const moved = Math.hypot(event.clientX - pointerDown.x, event.clientY - pointerDown.y);
+      pointerDown = null;
+      if (moved > 6) {
+        return;
+      }
+      const result = pick(event);
+      if (result.arrowNode >= 0) {
+        callbacksRef.current.onJunctionPick?.(result.arrowNode);
+      } else if (result.diceHit && callbacksRef.current.diceReady) {
+        callbacksRef.current.onDiceClick?.();
+      }
+    };
+    canvas.addEventListener("pointermove", handlePointerMove);
+    canvas.addEventListener("pointerleave", handlePointerLeave);
+    canvas.addEventListener("pointerdown", handlePointerDown);
+    canvas.addEventListener("pointerup", handlePointerUp);
+    controls.addEventListener("start", () => {
+      const state = stateRef.current;
+      if (state) {
+        state.cameraTween = null;
+      }
+    });
+
+    /* ---------------- render loop ---------------- */
+    let previous = performance.now();
+    const introStart = previous;
+    const introFrom = camera.position.clone();
+    const desiredTarget = new THREE.Vector3();
+
+    const animate = () => {
+      const state = stateRef.current;
+      if (!state) {
+        return;
+      }
+      const now = performance.now();
+      const elapsed = now / 1000;
+      const delta = Math.min((now - previous) / 1000, 0.05);
+      previous = now;
+
+      if (pendingPointer) {
+        const result = pick(pendingPointer);
+        pendingPointer = null;
+        const clickable = result.arrowNode >= 0 || (result.diceHit && callbacksRef.current.diceReady);
+        setCursor(clickable ? "pointer" : "grab");
+        setHover(result.nodeId >= 0 && !clickable ? { nodeId: result.nodeId, x: result.x, y: result.y } : null);
+      }
+
+      const moving = updateHop(state, now, reducedMotion);
+      if (!moving) {
+        state.pawnGroup.children[0].position.y = Math.sin(elapsed * 2.6) * 0.03;
+      }
+      const pawnPosition = state.pawnGroup.position;
+      state.pawnShadow.position.set(pawnPosition.x, SPACE_Y + 0.012, pawnPosition.z);
+      const lift = Math.max(0, pawnPosition.y - SPACE_Y);
+      state.pawnShadow.scale.setScalar(1.3 - lift * 0.5);
+      (state.pawnShadow.material as THREE.MeshBasicMaterial).opacity = 1 - lift * 0.6;
+      state.ring.scale.setScalar(1 + Math.sin(elapsed * 4) * 0.06);
+      (state.ring.material as THREE.MeshBasicMaterial).opacity = 0.55 + Math.sin(elapsed * 4) * 0.25;
+
+      updateDice(state, now, delta, elapsed);
+      updateCounter(state, elapsed);
+      updateArrows(state, elapsed);
+      updateDecks(state.decks, now);
+      updateEffects(state, delta);
+      updateAmbient(state.ambient, elapsed, delta);
+
+      // Camera: intro swoop, explicit tweens, then follow-cam.
+      const introT = Math.min(1, (now - introStart) / (reducedMotion ? 1 : 2600));
+      if (introT < 1) {
+        const eased = easeInOutCubic(introT);
+        desiredTarget.set(startNode.x, 0, startNode.z);
+        controls.target.lerpVectors(OVERVIEW_TARGET, desiredTarget, eased);
+        camera.position.lerpVectors(introFrom, desiredTarget.clone().add(FOLLOW_OFFSET), eased);
+      } else if (state.cameraTween) {
+        const tween = state.cameraTween;
+        const t = Math.min(1, (now - tween.start) / tween.duration);
+        const eased = easeInOutCubic(t);
+        camera.position.lerpVectors(tween.fromPosition, tween.toPosition, eased);
+        controls.target.lerpVectors(tween.fromTarget, tween.toTarget, eased);
+        if (t >= 1) {
+          state.cameraTween = null;
+        }
+      } else if (state.cameraMode === "follow") {
+        desiredTarget.set(pawnPosition.x, 0, pawnPosition.z);
+        const step = desiredTarget.sub(controls.target).multiplyScalar(reducedMotion ? 1 : Math.min(1, delta * 3));
+        controls.target.add(step);
+        camera.position.add(step);
+      }
+
+      controls.update();
+      renderer.render(scene, camera);
+      state.animationId = window.requestAnimationFrame(animate);
+    };
+
+    stateRef.current = {
       renderer,
       scene,
       camera,
-      world,
-      diceBody,
-      diceMesh,
-      pawnBody,
+      controls,
+      nodes,
+      spaceMeshes,
       pawnGroup,
-      pawnTarget,
-      highlightRing,
-      pawnSpotlight,
-      spotlightTarget,
-      revealCardGroup,
-      revealCardStart: 0,
-      sparkleField,
-      scenarioSetPiece,
-      tileMeshes,
+      pawnShadow,
+      ring,
+      counter,
+      dice: floatingDice,
+      arrows: [],
+      decks,
+      effects: [],
+      hop: {
+        queue: [],
+        current: null,
+        nodeId: 0,
+        stepCount: 0,
+        stepsAfter: 0,
+        onHop: (step) => callbacksRef.current.onHop?.(step),
+        onLand: (id) => callbacksRef.current.onLand?.(id),
+      },
+      cameraTween: null,
+      cameraMode: "follow",
+      ambient,
       animationId: window.requestAnimationFrame(animate),
     };
 
     return () => {
       resizeObserver.disconnect();
-      if (sceneRef.current) {
-        window.cancelAnimationFrame(sceneRef.current.animationId);
+      canvas.removeEventListener("pointermove", handlePointerMove);
+      canvas.removeEventListener("pointerleave", handlePointerLeave);
+      canvas.removeEventListener("pointerdown", handlePointerDown);
+      canvas.removeEventListener("pointerup", handlePointerUp);
+      if (stateRef.current) {
+        window.cancelAnimationFrame(stateRef.current.animationId);
       }
+      controls.dispose();
+      disposeObject(scene);
+      environment.dispose();
+      (scene.background as THREE.Texture | null)?.dispose();
       renderer.dispose();
-      scene.traverse((object) => {
-        if (object instanceof THREE.Mesh || object instanceof THREE.LineSegments || object instanceof THREE.Points) {
-          object.geometry.dispose();
-          const materials = Array.isArray(object.material) ? object.material : [object.material];
-          materials.forEach(disposeMaterial);
-        }
-      });
-      mountElement.removeChild(renderer.domElement);
-      sceneRef.current = null;
+      if (canvas.parentElement === mountElement) {
+        mountElement.removeChild(canvas);
+      }
+      stateRef.current = null;
     };
-  }, [boardSpaces, sceneIndustry, sceneOrganizationSize, sceneSubtitle, sceneTitle]);
+  }, [nodes, sceneSubtitle, sceneTitle]);
 
+  // Swap the pawn model when a new one is chosen.
   useEffect(() => {
-    const state = sceneRef.current;
+    const state = stateRef.current;
     if (!state) {
       return;
     }
-
+    const option = pawnOptions.find((item) => item.key === pawn) ?? pawnOptions[0];
+    const next = createPawnMesh(option);
+    next.position.copy(state.pawnGroup.position);
+    next.rotation.copy(state.pawnGroup.rotation);
     state.scene.remove(state.pawnGroup);
-    const pawnOption = pawnOptions.find((option) => option.key === pawn) ?? pawnOptions[0];
-    const nextPawn = createPawnMesh(pawnOption);
-    nextPawn.position.copy(state.pawnGroup.position);
-    state.scene.add(nextPawn);
-    state.pawnGroup = nextPawn;
+    disposeObject(state.pawnGroup);
+    state.scene.add(next);
+    state.pawnGroup = next;
+    const node = state.nodes[state.hop.nodeId];
+    spawnBurst(state, node.x, node.z, option.color);
   }, [pawn]);
 
   useEffect(() => {
-    const state = sceneRef.current;
+    const state = stateRef.current;
+    if (!state || !move) {
+      return;
+    }
+    state.hop.queue.push(...move.path);
+    state.hop.stepsAfter = move.stepsAfter;
+    state.hop.stepCount = 0;
+    state.dice.mode = "hidden";
+  }, [move]);
+
+  useEffect(() => {
+    const state = stateRef.current;
+    if (!state || resetNonce === 0) {
+      return;
+    }
+    const node = state.nodes[0];
+    state.hop.queue = [];
+    state.hop.current = null;
+    state.hop.nodeId = 0;
+    state.hop.stepsAfter = 0;
+    state.pawnGroup.position.set(node.x, SPACE_Y, node.z);
+    state.ring.position.set(node.x, SPACE_Y + 0.01, node.z);
+    state.dice.mode = "hidden";
+    spawnBurst(state, node.x, node.z);
+  }, [resetNonce]);
+
+  useEffect(() => {
+    const state = stateRef.current;
+    if (!state || !dice) {
+      return;
+    }
+    const rig = state.dice;
+    rig.mode = "rolling";
+    rig.start = performance.now();
+    rig.value = dice;
+    rig.finalized = false;
+  }, [dice]);
+
+  useEffect(() => {
+    const state = stateRef.current;
     if (!state) {
       return;
     }
-
-    state.pawnTarget.copy(getBoardPosition(positionIndex % boardSpaces.length).clone().setY(0.5));
-  }, [boardSpaces.length, positionIndex]);
+    if (diceReady && state.dice.mode === "hidden") {
+      state.dice.mode = "idle";
+    } else if (!diceReady && state.dice.mode === "idle") {
+      state.dice.mode = "hidden";
+    }
+  }, [diceReady]);
 
   useEffect(() => {
-    const state = sceneRef.current;
-    if (!state || rollNonce === 0) {
+    const state = stateRef.current;
+    if (!state) {
       return;
     }
+    state.arrows.forEach((arrow) => {
+      state.scene.remove(arrow);
+      disposeObject(arrow);
+    });
+    state.arrows = [];
+    if (!junction || junction.length === 0) {
+      return;
+    }
+    const from = state.nodes[state.hop.nodeId];
+    junction.forEach((nodeId) => {
+      const to = state.nodes[nodeId];
+      const arrow = createJunctionArrow(to.route === "shortcut" ? 0xff8a3d : 0x2fd39c);
+      const direction = new THREE.Vector3(to.x - from.x, 0, to.z - from.z).normalize();
+      arrow.position.set(from.x + direction.x * 1.15, SPACE_Y + 0.45, from.z + direction.z * 1.15);
+      arrow.rotation.y = Math.atan2(direction.x, direction.z);
+      arrow.userData.nodeId = nodeId;
+      arrow.userData.baseY = arrow.position.y;
+      arrow.userData.direction = direction;
+      state.scene.add(arrow);
+      state.arrows.push(arrow);
+    });
+  }, [junction]);
 
-    const push = 3.2 + (rollResult % 5) * 0.3;
-    state.diceBody.position.set(3.72, 1.22, 0.42);
-    state.diceBody.velocity.set(-push, 4.15, 1.1 - (rollResult % 3));
-    state.diceBody.angularVelocity.set(8.5 + rollResult * 0.34, 7.2, 5.2 + rollResult * 0.16);
-    state.diceBody.quaternion.setFromEuler(rollResult * 0.1, rollResult * 0.2, rollResult * 0.3);
-    state.revealCardStart = performance.now();
-    state.revealCardGroup.visible = true;
-  }, [rollNonce, rollResult]);
+  useEffect(() => {
+    const state = stateRef.current;
+    if (!state || !deckDraw) {
+      return;
+    }
+    state.decks[deckDraw.deck].drawStart = performance.now();
+  }, [deckDraw]);
+
+  useEffect(() => {
+    const state = stateRef.current;
+    if (!state) {
+      return;
+    }
+    const previousMode = state.cameraMode;
+    state.cameraMode = cameraMode;
+    if (previousMode === cameraMode && cameraMode === "follow") {
+      return;
+    }
+    const pawnPosition = state.pawnGroup.position;
+    let toTarget = OVERVIEW_TARGET.clone();
+    let toPosition = OVERVIEW_CAMERA.clone();
+    if (cameraMode === "top") {
+      toPosition = TOP_CAMERA.clone();
+    } else if (cameraMode === "follow") {
+      toTarget = new THREE.Vector3(pawnPosition.x, 0, pawnPosition.z);
+      toPosition = toTarget.clone().add(FOLLOW_OFFSET);
+    }
+    state.cameraTween = {
+      start: performance.now(),
+      duration: 900,
+      fromPosition: state.camera.position.clone(),
+      toPosition,
+      fromTarget: state.controls.target.clone(),
+      toTarget,
+    };
+  }, [cameraMode]);
 
   if (sceneError) {
     return (
-      <div className="flex h-full min-h-[28rem] w-full items-center justify-center p-6 text-center" aria-label="3D tabletop board unavailable">
-        <div className="max-w-md rounded-md border border-border bg-background/70 p-5">
+      <div className="flex h-full min-h-[28rem] w-full items-center justify-center p-6 text-center" aria-label="3D game board unavailable">
+        <div className="max-w-md rounded-xl border border-border bg-background/70 p-5">
           <p className="text-lg font-semibold text-foreground">3D board unavailable</p>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
             {sceneError} Switch to Classic Mode to keep running the tabletop.
@@ -331,1174 +576,1524 @@ export function TabletopBoardScene({
     );
   }
 
-  return <div ref={mountRef} className="h-full min-h-[28rem] w-full" aria-label="3D tabletop board" />;
+  const hoverNode = hover ? nodes[hover.nodeId] : null;
+  const hoverTone = hoverNode ? toneMeta[hoverNode.tone] : null;
+  const hoverEffect = hoverNode ? spaceEffects[hoverNode.tone] : null;
+
+  return (
+    <div className="relative h-full min-h-[28rem] w-full">
+      <div
+        ref={mountRef}
+        className={`absolute inset-0 ${cursor === "pointer" ? "cursor-pointer" : "cursor-grab active:cursor-grabbing"}`}
+        role="img"
+        aria-label="3D party game board. Drag to orbit, scroll to zoom, click the floating dice to roll."
+      />
+      {hover && hoverNode && hoverTone && hoverEffect ? (
+        <div
+          className="board-tooltip pointer-events-none absolute z-20 w-60 rounded-2xl border border-white/60 bg-white/90 p-3 text-[#1c1633] shadow-xl shadow-purple-900/20 backdrop-blur"
+          style={{
+            left: Math.min(hover.x + 16, (mountRef.current?.clientWidth ?? 600) - 250),
+            top: Math.max(8, hover.y - 110),
+          }}
+        >
+          <div className="flex items-center gap-2">
+            <span className="size-3 rounded-full" style={{ background: hoverTone.color }} />
+            <span className="text-[11px] font-bold uppercase tracking-[0.14em]" style={{ color: hoverTone.color }}>
+              {hoverTone.label}
+            </span>
+            {hoverNode.route === "shortcut" ? <span className="rounded-full bg-orange-100 px-1.5 text-[10px] font-bold text-orange-600">Shortcut</span> : null}
+            {hoverEffect.points !== 0 ? (
+              <span className={`ml-auto text-xs font-black ${hoverEffect.points > 0 ? "text-emerald-600" : "text-rose-600"}`}>
+                {hoverEffect.points > 0 ? "+" : ""}
+                {hoverEffect.points}
+              </span>
+            ) : null}
+          </div>
+          <p className="mt-1 text-base font-black">{hoverNode.label}</p>
+          <p className="mt-1 text-xs leading-5 text-[#1c1633]/70">{hoverTone.hint}</p>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
-function getBoardPosition(index: number) {
-  const space = getBoardSpace(index);
-  return new THREE.Vector3(space.x, 0, space.z);
-}
-
-function getBoardSpace(index: number) {
-  const positions = [
-    { x: -3.18, z: 2.42, side: "top", corner: true },
-    { x: -1.9, z: 2.42, side: "top", corner: false },
-    { x: -0.64, z: 2.42, side: "top", corner: false },
-    { x: 0.64, z: 2.42, side: "top", corner: false },
-    { x: 1.9, z: 2.42, side: "top", corner: false },
-    { x: 3.18, z: 2.42, side: "top", corner: true },
-    { x: 3.18, z: 1.46, side: "right", corner: false },
-    { x: 3.18, z: 0.48, side: "right", corner: false },
-    { x: 3.18, z: -0.48, side: "right", corner: false },
-    { x: 3.18, z: -1.46, side: "right", corner: false },
-    { x: 3.18, z: -2.42, side: "bottom", corner: true },
-    { x: 1.9, z: -2.42, side: "bottom", corner: false },
-    { x: 0.64, z: -2.42, side: "bottom", corner: false },
-    { x: -0.64, z: -2.42, side: "bottom", corner: false },
-    { x: -1.9, z: -2.42, side: "bottom", corner: false },
-    { x: -3.18, z: -2.42, side: "bottom", corner: true },
-    { x: -3.18, z: -1.46, side: "left", corner: false },
-    { x: -3.18, z: -0.48, side: "left", corner: false },
-    { x: -3.18, z: 0.48, side: "left", corner: false },
-    { x: -3.18, z: 1.46, side: "left", corner: false },
-  ] as const;
-
-  return positions[index % positions.length];
-}
+/* ------------------------------------------------------------------ */
+/* World construction                                                  */
+/* ------------------------------------------------------------------ */
 
 function addLighting(scene: THREE.Scene) {
-  const ambient = new THREE.HemisphereLight(0xd8fff1, 0x0d1117, 1.35);
-  scene.add(ambient);
-
-  const keyLight = new THREE.DirectionalLight(0xfff4df, 2.2);
-  keyLight.position.set(3.2, 8.4, 5.4);
-  keyLight.castShadow = true;
-  keyLight.shadow.mapSize.width = 1024;
-  keyLight.shadow.mapSize.height = 1024;
-  keyLight.shadow.camera.near = 1;
-  keyLight.shadow.camera.far = 18;
-  keyLight.shadow.camera.left = -7;
-  keyLight.shadow.camera.right = 7;
-  keyLight.shadow.camera.top = 7;
-  keyLight.shadow.camera.bottom = -7;
-  scene.add(keyLight);
-
-  const accentLight = new THREE.PointLight(0x23d39b, 1.9, 8.5);
-  accentLight.position.set(-3.8, 2.9, -2.5);
-  scene.add(accentLight);
-
-  const warmLight = new THREE.PointLight(0xf5b83d, 1.1, 7.5);
-  warmLight.position.set(3.5, 2.7, 2.8);
-  scene.add(warmLight);
+  scene.add(new THREE.HemisphereLight(0xffffff, 0xc7b6ee, 1.5));
+  const key = new THREE.DirectionalLight(0xfff4e2, 2.4);
+  key.position.set(8, 16, 9);
+  key.castShadow = true;
+  key.shadow.mapSize.set(2048, 2048);
+  key.shadow.camera.near = 2;
+  key.shadow.camera.far = 50;
+  key.shadow.camera.left = -14;
+  key.shadow.camera.right = 14;
+  key.shadow.camera.top = 12;
+  key.shadow.camera.bottom = -12;
+  key.shadow.bias = -0.0005;
+  key.shadow.normalBias = 0.03;
+  key.shadow.radius = 5;
+  scene.add(key);
+  const fill = new THREE.DirectionalLight(0xb9e6ff, 0.6);
+  fill.position.set(-10, 8, -6);
+  scene.add(fill);
 }
 
-function addRoom(scene: THREE.Scene) {
-  const floor = new THREE.Mesh(
-    new THREE.PlaneGeometry(19, 15),
-    new THREE.MeshStandardMaterial({ color: 0x171a1f, roughness: 0.86, metalness: 0.02 }),
+function addIsland(scene: THREE.Scene) {
+  const width = 23;
+  const depth = 16;
+  const top = new THREE.Mesh(
+    new THREE.PlaneGeometry(width - 0.3, depth - 0.3),
+    new THREE.MeshStandardMaterial({ map: createPlazaTexture(), roughness: 0.85 }),
   );
-  floor.rotation.x = -Math.PI / 2;
-  floor.position.y = -0.82;
-  floor.receiveShadow = true;
-  scene.add(floor);
+  top.rotation.x = -Math.PI / 2;
+  top.position.y = 0.001;
+  top.receiveShadow = true;
+  scene.add(top);
 
-  const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x101923, roughness: 0.9, metalness: 0.03 });
-  const backWall = new THREE.Mesh(new THREE.PlaneGeometry(19, 7), wallMaterial);
-  backWall.position.set(0, 2.15, -7.1);
-  scene.add(backWall);
-
-  const leftWall = new THREE.Mesh(new THREE.PlaneGeometry(14, 7), wallMaterial);
-  leftWall.position.set(-9.4, 2.15, 0);
-  leftWall.rotation.y = Math.PI / 2;
-  scene.add(leftWall);
-
-  const gridMaterial = new THREE.MeshBasicMaterial({ color: 0x23d39b, transparent: true, opacity: 0.1 });
-  for (let index = 0; index < 12; index += 1) {
-    const line = new THREE.Mesh(new THREE.BoxGeometry(0.018, 2.6, 0.018), gridMaterial);
-    line.position.set(-5.6 + index * 1.02, 1.45, -7.08);
-    scene.add(line);
-  }
-  for (let index = 0; index < 5; index += 1) {
-    const line = new THREE.Mesh(new THREE.BoxGeometry(12.4, 0.018, 0.018), gridMaterial);
-    line.position.set(0, 0.52 + index * 0.56, -7.07);
-    scene.add(line);
-  }
-}
-
-function addTable(scene: THREE.Scene) {
-  const tableMaterial = new THREE.MeshStandardMaterial({ color: 0x6b4228, roughness: 0.62, metalness: 0.03 });
-  const tableTop = new THREE.Mesh(new THREE.BoxGeometry(9.8, 0.36, 7.55), tableMaterial);
-  tableTop.position.y = -0.28;
-  tableTop.castShadow = true;
-  tableTop.receiveShadow = true;
-  scene.add(tableTop);
-
-  const edgeMaterial = new THREE.MeshStandardMaterial({ color: 0x3f2618, roughness: 0.58, metalness: 0.05 });
-  addFlatBar(scene, 0, -0.03, 3.88, 10.1, 0.16, edgeMaterial);
-  addFlatBar(scene, 0, -0.03, -3.88, 10.1, 0.16, edgeMaterial);
-  addFlatBar(scene, -5.02, -0.03, 0, 0.16, 7.55, edgeMaterial);
-  addFlatBar(scene, 5.02, -0.03, 0, 0.16, 7.55, edgeMaterial);
-  addTableLegs(scene, tableMaterial);
-}
-
-function addTableLegs(scene: THREE.Scene, material: THREE.Material) {
-  const legGeometry = new THREE.BoxGeometry(0.38, 1.35, 0.38);
-  const legPositions = [
-    [-4.45, -1.0, -3.2],
-    [4.45, -1.0, -3.2],
-    [-4.45, -1.0, 3.2],
-    [4.45, -1.0, 3.2],
-  ];
-
-  legPositions.forEach(([x, y, z]) => {
-    const leg = new THREE.Mesh(legGeometry, material);
-    leg.position.set(x, y, z);
-    leg.castShadow = true;
-    leg.receiveShadow = true;
-    scene.add(leg);
-  });
-}
-
-function addTabletopDetails(scene: THREE.Scene) {
-  const grainMaterial = new THREE.MeshBasicMaterial({ color: 0xd49a62, transparent: true, opacity: 0.14 });
-  for (let index = 0; index < 12; index += 1) {
-    const grain = new THREE.Mesh(new THREE.PlaneGeometry(8.8, 0.018), grainMaterial);
-    grain.position.set(0, -0.095, -3.3 + index * 0.6);
-    grain.rotation.x = -Math.PI / 2;
-    scene.add(grain);
-  }
-
-  const notebook = new THREE.Mesh(
-    new THREE.BoxGeometry(1.2, 0.055, 0.84),
-    new THREE.MeshStandardMaterial({ color: 0xe7dcc4, roughness: 0.76 }),
+  const slab = new THREE.Mesh(
+    new RoundedBoxGeometry(width, 1.1, depth, 4, 0.35),
+    new THREE.MeshStandardMaterial({ color: 0xf6e7f2, roughness: 0.7 }),
   );
-  notebook.position.set(-4.05, 0.03, -2.6);
-  notebook.rotation.y = 0.2;
-  notebook.castShadow = true;
-  scene.add(notebook);
+  slab.position.y = -0.551;
+  slab.receiveShadow = true;
+  scene.add(slab);
 
-  const notesLabel = createLabelMesh("Notes", "#28313d", {
-    width: 150,
-    height: 70,
-    fontSize: 24,
-    planeWidth: 0.72,
-    planeHeight: 0.34,
-    fill: "rgba(231,220,196,0.1)",
-    stroke: "rgba(40,49,61,0.28)",
-  });
-  notesLabel.position.set(-4.05, 0.087, -2.6);
-  notesLabel.rotation.set(-Math.PI / 2, 0, 0.2);
-  scene.add(notesLabel);
-
-  const pen = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.035, 0.035, 0.9, 12),
-    new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.42, metalness: 0.2 }),
+  const trim = new THREE.Mesh(
+    new RoundedBoxGeometry(width + 0.25, 0.28, depth + 0.25, 4, 0.14),
+    new THREE.MeshStandardMaterial({ color: 0xff9ec7, roughness: 0.5 }),
   );
-  pen.position.set(-3.68, 0.14, -2.34);
-  pen.rotation.z = Math.PI / 2;
-  pen.rotation.y = -0.36;
-  pen.castShadow = true;
-  scene.add(pen);
+  trim.position.y = -0.85;
+  scene.add(trim);
 
-  const coffee = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.23, 0.19, 0.34, 24),
-    new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.48 }),
-  );
-  coffee.position.set(4.08, 0.065, 2.8);
-  coffee.castShadow = true;
-  scene.add(coffee);
-
-  const coffeeTop = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.17, 0.17, 0.012, 24),
-    new THREE.MeshBasicMaterial({ color: 0x4a2d1c }),
-  );
-  coffeeTop.position.set(4.08, 0.245, 2.8);
-  scene.add(coffeeTop);
-
-  addLaptop(scene);
-  addDiceTray(scene);
-}
-
-function addLaptop(scene: THREE.Scene) {
   const base = new THREE.Mesh(
-    new THREE.BoxGeometry(1.24, 0.055, 0.76),
-    new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.52, metalness: 0.2 }),
+    new THREE.CylinderGeometry(9.5, 3.5, 4.5, 40, 1),
+    new THREE.MeshStandardMaterial({ color: 0xc6b3f2, roughness: 0.9, flatShading: true }),
   );
-  base.position.set(3.72, 0.02, -2.78);
-  base.rotation.y = -0.18;
-  base.castShadow = true;
+  base.scale.set(1.2, 1, 0.85);
+  base.position.y = -3.3;
   scene.add(base);
-
-  const screen = new THREE.Mesh(
-    new THREE.BoxGeometry(1.18, 0.055, 0.74),
-    new THREE.MeshStandardMaterial({ color: 0x08111f, roughness: 0.3, metalness: 0.18, emissive: 0x113a35, emissiveIntensity: 0.35 }),
-  );
-  screen.position.set(3.77, 0.36, -3.08);
-  screen.rotation.x = -1.08;
-  screen.rotation.y = -0.18;
-  scene.add(screen);
-
-  const screenLabel = createLabelMesh("SOC", "#23d39b", { width: 130, height: 80, fontSize: 28, planeWidth: 0.55, planeHeight: 0.34, fill: "rgba(5,12,20,0.75)" });
-  screenLabel.position.set(3.77, 0.39, -3.08);
-  screenLabel.rotation.x = -1.08;
-  screenLabel.rotation.y = -0.18;
-  scene.add(screenLabel);
 }
 
-function addDiceTray(scene: THREE.Scene) {
-  const trayMaterial = new THREE.MeshStandardMaterial({ color: 0x27190f, roughness: 0.7, metalness: 0.04 });
-  const feltMaterial = new THREE.MeshStandardMaterial({ color: 0x122e24, roughness: 0.9, metalness: 0.02 });
-  const trayX = 4.08;
-  const trayZ = 0.28;
-  const tray = new THREE.Mesh(new THREE.BoxGeometry(1.65, 0.08, 1.25), feltMaterial);
-  tray.position.set(trayX, 0.02, trayZ);
-  tray.castShadow = true;
-  scene.add(tray);
-  addFlatBar(scene, trayX, 0.11, trayZ + 0.65, 1.72, 0.08, trayMaterial);
-  addFlatBar(scene, trayX, 0.11, trayZ - 0.65, 1.72, 0.08, trayMaterial);
-  addFlatBar(scene, trayX - 0.88, 0.11, trayZ, 0.08, 1.22, trayMaterial);
-  addFlatBar(scene, trayX + 0.88, 0.11, trayZ, 0.08, 1.22, trayMaterial);
+function addPaths(scene: THREE.Scene, nodes: BoardNode[]) {
+  const main = nodes.filter((node) => node.route === "main");
+  const mainCurve = new THREE.CatmullRomCurve3(
+    main.map((node) => new THREE.Vector3(node.x, 0, node.z)),
+    true,
+    "catmullrom",
+    0.5,
+  );
+  addRibbon(scene, mainCurve, 1.32, 0.02, 0xe2c792, 400);
+  addRibbon(scene, mainCurve, 1.0, 0.04, 0xfff3d6, 400);
 
-  const trayLabel = createLabelMesh("ROLL ZONE", "#fbbf24", {
-    width: 180,
-    height: 56,
-    fontSize: 18,
-    planeWidth: 0.72,
-    planeHeight: 0.22,
-    fill: "rgba(39,25,15,0.74)",
-    stroke: "rgba(251,191,36,0.34)",
+  // Shortcuts: from each fork node through its shortcut chain back to the main loop.
+  nodes
+    .filter((node) => node.route === "main" && node.next.length > 1)
+    .forEach((fork) => {
+      const chain: BoardNode[] = [fork];
+      let cursor = nodes[fork.next[1]];
+      while (cursor.route === "shortcut") {
+        chain.push(cursor);
+        cursor = nodes[cursor.next[0]];
+      }
+      chain.push(cursor);
+      const curve = new THREE.CatmullRomCurve3(chain.map((node) => new THREE.Vector3(node.x, 0, node.z)), false, "catmullrom", 0.5);
+      addRibbon(scene, curve, 1.26, 0.022, 0xb59ae8, 160);
+      addRibbon(scene, curve, 0.96, 0.042, 0xe7dcff, 160);
+    });
+
+  // Direction chevrons painted between spaces.
+  const chevron = createChevronGeometry();
+  const chevronMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, side: THREE.DoubleSide });
+  const forkChevron = new THREE.MeshBasicMaterial({ color: 0xff8a3d, side: THREE.DoubleSide });
+  nodes.forEach((node) => {
+    node.next.forEach((nextId, index) => {
+      const next = nodes[nextId];
+      const isFork = node.next.length > 1;
+      if (!isFork && node.id % 2 === 1 && node.route === "main") {
+        return;
+      }
+      const mesh = new THREE.Mesh(chevron, isFork && index === 1 ? forkChevron : chevronMaterial);
+      mesh.position.set((node.x + next.x) / 2, 0.05, (node.z + next.z) / 2);
+      mesh.rotation.y = facingBetween(node, next);
+      scene.add(mesh);
+    });
   });
-  trayLabel.position.set(trayX, 0.145, trayZ - 0.02);
-  trayLabel.rotation.x = -Math.PI / 2;
-  scene.add(trayLabel);
 }
 
-function addGameBoard(scene: THREE.Scene, sceneTitle: string, sceneSubtitle: string) {
-  const boardShadow = new THREE.Mesh(
-    new THREE.BoxGeometry(8.08, 0.08, 6.38),
-    new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.28 }),
-  );
-  boardShadow.position.set(0.1, -0.045, -0.1);
-  scene.add(boardShadow);
-
-  const boardTrim = new THREE.Mesh(
-    new THREE.BoxGeometry(7.92, 0.12, 6.22),
-    new THREE.MeshStandardMaterial({ color: 0x1f2937, roughness: 0.58, metalness: 0.14 }),
-  );
-  boardTrim.position.y = 0.02;
-  boardTrim.castShadow = true;
-  boardTrim.receiveShadow = true;
-  scene.add(boardTrim);
-
-  const board = new THREE.Mesh(
-    new THREE.BoxGeometry(7.55, 0.14, 5.85),
-    new THREE.MeshStandardMaterial({ color: 0x0f2c2b, roughness: 0.78, metalness: 0.06, emissive: 0x031f1b, emissiveIntensity: 0.2 }),
-  );
-  board.position.y = 0.095;
-  board.receiveShadow = true;
-  scene.add(board);
-
-  const centerPanel = new THREE.Mesh(
-    new THREE.BoxGeometry(4.58, 0.09, 2.92),
-    new THREE.MeshStandardMaterial({ color: 0x07131f, roughness: 0.78, metalness: 0.1, emissive: 0x052621, emissiveIntensity: 0.36 }),
-  );
-  centerPanel.position.y = 0.18;
-  centerPanel.castShadow = true;
-  centerPanel.receiveShadow = true;
-  scene.add(centerPanel);
-
-  const centerGlow = new THREE.Mesh(
-    new THREE.PlaneGeometry(4.38, 2.7),
-    new THREE.MeshBasicMaterial({ color: 0x23d39b, transparent: true, opacity: 0.065 }),
-  );
-  centerGlow.position.y = 0.234;
-  centerGlow.rotation.x = -Math.PI / 2;
-  scene.add(centerGlow);
-
-  const title = createLabelMesh("TABLETOPFORGE", "#23d39b", { width: 420, height: 90, fontSize: 34, planeWidth: 2.55, planeHeight: 0.5 });
-  title.position.set(0, 0.255, -0.54);
-  title.rotation.x = -Math.PI / 2;
-  scene.add(title);
-
-  const scenarioLabel = createLabelMesh(sceneTitle, "#ffffff", { width: 460, height: 106, fontSize: 26, planeWidth: 2.9, planeHeight: 0.62 });
-  scenarioLabel.position.set(0, 0.255, 0.16);
-  scenarioLabel.rotation.x = -Math.PI / 2;
-  scene.add(scenarioLabel);
-
-  const subtitle = createLabelMesh(sceneSubtitle, "#b8fff0", { width: 460, height: 78, fontSize: 19, planeWidth: 2.9, planeHeight: 0.38 });
-  subtitle.position.set(0, 0.255, 0.82);
-  subtitle.rotation.x = -Math.PI / 2;
-  scene.add(subtitle);
-}
-
-function addBoardSpaces(scene: THREE.Scene, boardSpaces: CyberBoardSpace[]) {
-  const tileMeshes: THREE.Mesh[] = [];
-  for (let index = 0; index < boardSpaceCount; index += 1) {
-    const space = getBoardSpace(index);
-    const isCorner = space.corner === true;
-    const boardSpace = boardSpaces[index];
-    const material = new THREE.MeshStandardMaterial({
-      color: getSpaceColor(boardSpace.tone, isCorner),
-      roughness: 0.56,
-      metalness: 0.08,
-      emissive: getSpaceColor(boardSpace.tone, isCorner),
-      emissiveIntensity: isCorner ? 0.16 : 0.08,
-    });
-    const isVertical = space.side === "left" || space.side === "right";
-    const tileGeometry = new THREE.BoxGeometry(
-      isCorner ? 0.98 : isVertical ? 0.58 : 0.88,
-      0.12,
-      isCorner ? 0.82 : isVertical ? 0.74 : 0.56,
-    );
-    const tile = new THREE.Mesh(tileGeometry, material);
-    tile.position.copy(getBoardPosition(index));
-    tile.position.y = 0.205;
-    tile.castShadow = true;
-    tile.receiveShadow = true;
-    scene.add(tile);
-    tileMeshes.push(tile);
-
-    const edges = new THREE.LineSegments(
-      new THREE.EdgesGeometry(tileGeometry),
-      new THREE.LineBasicMaterial({ color: isCorner ? 0xd8fff1 : 0x80ffe1, transparent: true, opacity: isCorner ? 0.58 : 0.28 }),
-    );
-    edges.position.copy(tile.position);
-    scene.add(edges);
-
-    const label = createLabelMesh(boardSpace.label, getSpaceTextColor(boardSpace.tone, isCorner), {
-      width: 176,
-      height: 70,
-      fontSize: isCorner ? 20 : 18,
-      planeWidth: isVertical ? 0.72 : 0.78,
-      planeHeight: 0.3,
-    });
-    label.position.copy(tile.position);
-    label.position.y = 0.276;
-    label.rotation.x = -Math.PI / 2;
-    if (space.side === "right") {
-      label.rotation.z = -Math.PI / 2;
-    } else if (space.side === "left") {
-      label.rotation.z = Math.PI / 2;
-    } else if (space.side === "bottom") {
-      label.rotation.z = Math.PI;
+function addRibbon(scene: THREE.Scene, curve: THREE.Curve<THREE.Vector3>, width: number, y: number, color: number, segments: number) {
+  const points = curve.getSpacedPoints(segments);
+  const positions: number[] = [];
+  const indices: number[] = [];
+  points.forEach((point, index) => {
+    const ahead = points[Math.min(points.length - 1, index + 1)];
+    const behind = points[Math.max(0, index - 1)];
+    const tangent = new THREE.Vector3().subVectors(ahead, behind).setY(0).normalize();
+    const normal = new THREE.Vector3(-tangent.z, 0, tangent.x).multiplyScalar(width / 2);
+    positions.push(point.x + normal.x, y, point.z + normal.z, point.x - normal.x, y, point.z - normal.z);
+    if (index < points.length - 1) {
+      const a = index * 2;
+      indices.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
     }
-    scene.add(label);
-
-    addTileIcon(scene, boardSpace.tone, tile.position, space.side);
-  }
-
-  return tileMeshes;
-}
-
-function addTileIcon(scene: THREE.Scene, tone: CyberBoardSpace["tone"], position: THREE.Vector3, side: ReturnType<typeof getBoardSpace>["side"]) {
-  const iconMaterial = new THREE.MeshStandardMaterial({
-    color: getSpaceAccentColor(tone),
-    roughness: 0.34,
-    metalness: 0.12,
-    emissive: getSpaceAccentColor(tone),
-    emissiveIntensity: 0.34,
   });
-  const geometry =
-    tone === "inject"
-      ? new THREE.TetrahedronGeometry(0.08)
-      : tone === "decision"
-        ? new THREE.OctahedronGeometry(0.075)
-        : tone === "recovery"
-          ? new THREE.TorusGeometry(0.07, 0.014, 8, 18)
-          : new THREE.CylinderGeometry(0.06, 0.06, 0.025, 18);
-  const icon = new THREE.Mesh(geometry, iconMaterial);
-  const offset = side === "top" ? [0, 0.105, -0.24] : side === "bottom" ? [0, 0.105, 0.24] : side === "left" ? [0.22, 0.105, 0] : [-0.22, 0.105, 0];
-  icon.position.set(position.x + offset[0], position.y + offset[1], position.z + offset[2]);
-  icon.rotation.x = Math.PI / 2;
-  icon.castShadow = true;
-  scene.add(icon);
-}
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  const material = new THREE.MeshStandardMaterial({ color, roughness: 0.75, side: THREE.DoubleSide });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.receiveShadow = true;
+  scene.add(mesh);
 
-function addBoardTrackDecorations(scene: THREE.Scene, boardSpaces: CyberBoardSpace[]) {
-  const railMaterial = new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.5, metalness: 0.22 });
-  const accentMaterial = new THREE.MeshStandardMaterial({ color: 0x23d39b, roughness: 0.42, metalness: 0.12, emissive: 0x0a5b48, emissiveIntensity: 0.45 });
-  const dimAccentMaterial = new THREE.MeshBasicMaterial({ color: 0x23d39b, transparent: true, opacity: 0.34 });
-  const amberMaterial = new THREE.MeshBasicMaterial({ color: 0xf5b83d, transparent: true, opacity: 0.42 });
-
-  addFlatBar(scene, 0, 0.285, 2.94, 7.08, 0.045, railMaterial);
-  addFlatBar(scene, 0, 0.285, -2.94, 7.08, 0.045, railMaterial);
-  addFlatBar(scene, -3.84, 0.285, 0, 0.045, 5.18, railMaterial);
-  addFlatBar(scene, 3.84, 0.285, 0, 0.045, 5.18, railMaterial);
-
-  addFlatBar(scene, 0, 0.305, 1.92, 4.38, 0.03, dimAccentMaterial);
-  addFlatBar(scene, 0, 0.305, -1.92, 4.38, 0.03, dimAccentMaterial);
-  addFlatBar(scene, -2.48, 0.305, 0, 0.03, 3.26, dimAccentMaterial);
-  addFlatBar(scene, 2.48, 0.305, 0, 0.03, 3.26, dimAccentMaterial);
-
-  for (let index = 0; index < boardSpaceCount; index += 1) {
-    const space = getBoardSpace(index);
-    const boardSpace = boardSpaces[index];
-    const pip = new THREE.Mesh(
-      new THREE.CylinderGeometry(space.corner ? 0.07 : 0.048, space.corner ? 0.07 : 0.048, 0.03, 16),
-      new THREE.MeshStandardMaterial({
-        color: getSpaceAccentColor(boardSpace.tone),
-        roughness: 0.34,
-        metalness: 0.16,
-        emissive: getSpaceAccentColor(boardSpace.tone),
-        emissiveIntensity: 0.42,
-      }),
-    );
-    pip.rotation.x = Math.PI / 2;
-    pip.position.set(...getOuterMarkerPosition(space));
-    pip.castShadow = true;
-    scene.add(pip);
-  }
-
-  const networkNodes = [
-    [-2.06, 0.33, -0.94],
-    [-0.92, 0.33, 0.82],
-    [0.42, 0.33, -0.72],
-    [1.82, 0.33, 0.72],
-  ];
-
-  networkNodes.forEach(([x, y, z], index) => {
-    const node = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.09, 0.09, 0.03, 18),
-      index % 2 === 0 ? accentMaterial : amberMaterial,
-    );
-    node.rotation.x = Math.PI / 2;
-    node.position.set(x, y, z);
-    node.castShadow = true;
-    scene.add(node);
-  });
-
-  addTrace(scene, -2.06, -0.94, -0.92, 0.82, dimAccentMaterial);
-  addTrace(scene, -0.92, 0.82, 0.42, -0.72, amberMaterial);
-  addTrace(scene, 0.42, -0.72, 1.82, 0.72, dimAccentMaterial);
-  addCornerBadges(scene);
-}
-
-function addCornerBadges(scene: THREE.Scene) {
-  const badges = [
-    { text: "START", x: -3.18, z: 2.42, rotation: 0, color: "#ffffff" },
-    { text: "DECIDE", x: 3.18, z: 2.42, rotation: 0, color: "#d8fff1" },
-    { text: "IMPACT", x: 3.18, z: -2.42, rotation: Math.PI, color: "#d8fff1" },
-    { text: "TWIST", x: -3.18, z: -2.42, rotation: Math.PI, color: "#fbbf24" },
-  ];
-
-  badges.forEach((badge) => {
-    const label = createLabelMesh(badge.text, badge.color, {
-      width: 180,
-      height: 54,
-      fontSize: 19,
-      planeWidth: 0.72,
-      planeHeight: 0.23,
-      fill: "rgba(6, 12, 20, 0.84)",
-    });
-    label.position.set(badge.x, 0.335, badge.z);
-    label.rotation.set(-Math.PI / 2, 0, badge.rotation);
-    scene.add(label);
+  // Round caps hide the seams where ribbons meet.
+  [points[0], points[points.length - 1]].forEach((point) => {
+    const cap = new THREE.Mesh(new THREE.CircleGeometry(width / 2, 32), material);
+    cap.rotation.x = -Math.PI / 2;
+    cap.position.set(point.x, y, point.z);
+    cap.receiveShadow = true;
+    scene.add(cap);
   });
 }
 
-function addCardDecks(scene: THREE.Scene) {
-  const deckMaterial = new THREE.MeshStandardMaterial({ color: 0x13251f, roughness: 0.58, metalness: 0.06, emissive: 0x052b22, emissiveIntensity: 0.18 });
-  const injectMaterial = new THREE.MeshStandardMaterial({ color: 0x3d2814, roughness: 0.58, metalness: 0.06, emissive: 0x372108, emissiveIntensity: 0.22 });
-  addDeckStack(scene, "Prompt Deck", "#d8fff1", deckMaterial, -1.82, 1.08, 0.22);
-  addDeckStack(scene, "Inject Deck", "#fbbf24", injectMaterial, 1.84, -1.08, -0.32);
+function createChevronGeometry() {
+  const shape = new THREE.Shape();
+  shape.moveTo(0, 0.2);
+  shape.lineTo(0.2, -0.02);
+  shape.lineTo(0.2, -0.16);
+  shape.lineTo(0, 0.06);
+  shape.lineTo(-0.2, -0.16);
+  shape.lineTo(-0.2, -0.02);
+  shape.closePath();
+  const geometry = new THREE.ShapeGeometry(shape);
+  // Lay flat with the tip pointing along +Z so rotation.y = atan2(dx, dz) aims it.
+  geometry.rotateX(Math.PI / 2);
+  return geometry;
 }
 
-function addDeckStack(scene: THREE.Scene, labelText: string, color: string, material: THREE.Material, x: number, z: number, rotation: number) {
-  for (let index = 0; index < 6; index += 1) {
-    const card = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.036, 1.2), material);
-    card.position.set(x + index * 0.025, 0.29 + index * 0.017, z + index * 0.012);
-    card.rotation.y = rotation + index * 0.012;
-    card.castShadow = true;
-    scene.add(card);
-  }
+function addSpaces(scene: THREE.Scene, nodes: BoardNode[]) {
+  const textures = new Map<string, THREE.Texture>();
+  const sideMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.4 });
+  const meshes: THREE.Mesh[] = [];
+  nodes.forEach((node) => {
+    const isStart = node.id === 0;
+    const key = isStart ? "start-big" : node.tone;
+    if (!textures.has(key)) {
+      textures.set(key, createSpaceTexture(node.tone, isStart));
+    }
+    const radius = isStart ? SPACE_RADIUS * 1.35 : SPACE_RADIUS;
+    const topMaterial = new THREE.MeshStandardMaterial({ map: textures.get(key), roughness: 0.35, emissive: 0xffffff, emissiveIntensity: 0.06 });
+    const mesh = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius * 1.04, 0.14, 40), [sideMaterial, topMaterial, sideMaterial]);
+    mesh.position.set(node.x, SPACE_Y - 0.07, node.z);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    mesh.userData.nodeId = node.id;
+    scene.add(mesh);
+    meshes.push(mesh);
+  });
+  return meshes;
+}
 
-  const stripe = new THREE.Mesh(
-    new THREE.BoxGeometry(0.72, 0.012, 0.09),
-    new THREE.MeshBasicMaterial({ color: color === "#fbbf24" ? 0xfbbf24 : 0x23d39b, transparent: true, opacity: 0.8 }),
+/* ------------------------------------------------------------------ */
+/* Landmarks & decor                                                   */
+/* ------------------------------------------------------------------ */
+
+function addLandmarks(scene: THREE.Scene) {
+  // Security Operations Center with a radar dish.
+  const soc = makeBuilding(scene, { x: -9.4, z: -5.4, w: 3, h: 2.4, d: 2.2, color: 0x8fc9ff, roof: 0x4f7fe0, sign: "SOC", signColor: "#2a58c9" });
+  const dish = new THREE.Mesh(
+    new THREE.SphereGeometry(0.6, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2),
+    new THREE.MeshStandardMaterial({ color: 0xffffff, side: THREE.DoubleSide, roughness: 0.3 }),
   );
-  stripe.position.set(x, 0.42, z - 0.28);
-  stripe.rotation.y = rotation;
-  scene.add(stripe);
+  dish.rotation.x = Math.PI * 0.75;
+  dish.position.set(0.6, 2.95, 0);
+  soc.add(dish);
 
-  const label = createLabelMesh(labelText, color, { width: 220, height: 80, fontSize: 22, planeWidth: 0.88, planeHeight: 0.34 });
-  label.position.set(x, 0.45, z);
-  label.rotation.set(-Math.PI / 2, 0, rotation);
-  scene.add(label);
+  // Comms tower.
+  const tower = new THREE.Group();
+  tower.position.set(9.6, 0, -5.6);
+  const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.42, 4.6, 16), new THREE.MeshStandardMaterial({ color: 0xffb3d1, roughness: 0.5 }));
+  mast.position.y = 2.3;
+  mast.castShadow = true;
+  tower.add(mast);
+  [1.6, 2.6, 3.6].forEach((y, index) => {
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.55 - index * 0.1, 0.06, 10, 32), new THREE.MeshStandardMaterial({ color: 0xff6fa8 }));
+    ring.rotation.x = Math.PI / 2;
+    ring.position.y = y;
+    tower.add(ring);
+  });
+  const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.2, 16, 12), new THREE.MeshBasicMaterial({ color: 0xff3d6e }));
+  beacon.position.y = 4.75;
+  beacon.name = "beacon";
+  tower.add(beacon);
+  tower.add(makeSign("COMMS", "#d63a7a", 0, 1.0, 0.5));
+  scene.add(tower);
+
+  // Backup vault.
+  const vault = new THREE.Group();
+  vault.position.set(9.6, 0, 4.8);
+  const drum = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.2, 1.4, 32), new THREE.MeshStandardMaterial({ color: 0xa8efc4, roughness: 0.45 }));
+  drum.position.y = 0.7;
+  drum.castShadow = true;
+  vault.add(drum);
+  const dome = new THREE.Mesh(
+    new THREE.SphereGeometry(1.1, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2),
+    new THREE.MeshStandardMaterial({ color: 0x3fcf8e, roughness: 0.35 }),
+  );
+  dome.position.y = 1.4;
+  dome.castShadow = true;
+  vault.add(dome);
+  vault.add(makeSign("BACKUPS", "#1f9c63", 0, 0.75, 1.22));
+  scene.add(vault);
+
+  // Legal office with columns.
+  const legal = makeBuilding(scene, { x: -9.6, z: 4.8, w: 2.6, h: 1.4, d: 2, color: 0xfff4dc, roof: 0xb18cf0, sign: "LEGAL", signColor: "#7a4fd6" });
+  for (let column = -1; column <= 1; column += 1) {
+    const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 1.4, 12), new THREE.MeshStandardMaterial({ color: 0xffffff }));
+    pillar.position.set(column * 0.8, 0.7, 1.15);
+    pillar.castShadow = true;
+    legal.add(pillar);
+  }
+
+  // Executive tower behind the board.
+  const exec = makeBuilding(scene, { x: 0, z: -7.1, w: 3.2, h: 3.4, d: 1.4, color: 0xffd7a8, roof: 0xff9f43, sign: "EXEC SUITE", signColor: "#d4721c" });
+  const crown = new THREE.Mesh(new THREE.ConeGeometry(0.9, 1, 4), new THREE.MeshStandardMaterial({ color: 0xff9f43 }));
+  crown.position.y = 4.1;
+  crown.rotation.y = Math.PI / 4;
+  crown.castShadow = true;
+  exec.add(crown);
+
+  makeBuilding(scene, { x: -4.6, z: -6.8, w: 1.6, h: 1.1, d: 1.1, color: 0xc9f3ff, roof: 0x38bdf8, sign: "HELP DESK", signColor: "#0e86b8" });
+  makeBuilding(scene, { x: 4.6, z: -6.8, w: 1.6, h: 1.1, d: 1.1, color: 0xffe0ef, roof: 0xf472b6, sign: "HR", signColor: "#c2417f" });
 }
 
-function addGameTokens(scene: THREE.Scene) {
-  const tokens = [
-    { label: "IRP", color: "#23d39b", x: -2.0, z: 0.95 },
-    { label: "LOG", color: "#68a8ff", x: -0.72, z: -0.9 },
-    { label: "COMMS", color: "#f5b83d", x: 0.82, z: -0.9 },
-    { label: "RECOVER", color: "#d98cff", x: 2.05, z: 0.95 },
+function makeBuilding(
+  scene: THREE.Scene,
+  options: { x: number; z: number; w: number; h: number; d: number; color: number; roof: number; sign: string; signColor: string },
+) {
+  const group = new THREE.Group();
+  group.position.set(options.x, 0, options.z);
+  const body = new THREE.Mesh(
+    new RoundedBoxGeometry(options.w, options.h, options.d, 3, 0.12),
+    new THREE.MeshStandardMaterial({ color: options.color, roughness: 0.55 }),
+  );
+  body.position.y = options.h / 2;
+  body.castShadow = true;
+  body.receiveShadow = true;
+  group.add(body);
+  const roof = new THREE.Mesh(
+    new RoundedBoxGeometry(options.w + 0.3, 0.25, options.d + 0.3, 3, 0.1),
+    new THREE.MeshStandardMaterial({ color: options.roof, roughness: 0.4 }),
+  );
+  roof.position.y = options.h + 0.1;
+  roof.castShadow = true;
+  group.add(roof);
+
+  const windows = new THREE.Mesh(
+    new THREE.PlaneGeometry(options.w * 0.82, options.h * 0.45),
+    new THREE.MeshStandardMaterial({ map: createWindowTexture(), transparent: true, emissive: 0xfff6c8, emissiveIntensity: 0.15 }),
+  );
+  windows.position.set(0, options.h * 0.66, options.d / 2 + 0.01);
+  group.add(windows);
+  group.add(makeSign(options.sign, options.signColor, 0, Math.min(options.h * 0.28, 0.5) + 0.1, options.d / 2 + 0.02));
+  scene.add(group);
+  return group;
+}
+
+function makeSign(text: string, color: string, x: number, y: number, z: number) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 128;
+  const ctx = canvas.getContext("2d");
+  if (ctx) {
+    ctx.fillStyle = color;
+    roundRect(ctx, 6, 6, 500, 116, 50);
+    ctx.fill();
+    ctx.fillStyle = "#ffffff";
+    ctx.font = `900 60px ${FONT}`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    setLetterSpacing(ctx, "4px");
+    ctx.fillText(text, 256, 68);
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const sign = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.4), new THREE.MeshBasicMaterial({ map: texture, transparent: true }));
+  sign.position.set(x, y, z);
+  return sign;
+}
+
+interface Ambient {
+  clouds: THREE.Group[];
+  spinner: THREE.Group | null;
+  beacon: THREE.Object3D | null;
+  fountain: THREE.Points | null;
+}
+
+function addDecor(scene: THREE.Scene): Ambient {
+  const treeSpots: Array<[number, number, number]> = [
+    [-10.3, -1.2, 0x7ed99b],
+    [-10.4, 1.6, 0xffa8cf],
+    [10.4, -1.6, 0x7ed99b],
+    [10.3, 1.4, 0xffc670],
+    [-5.0, 0.2, 0x9be7b5],
+    [5.0, -0.2, 0x9be7b5],
+    [-6.6, -7.1, 0xffa8cf],
+    [6.8, -7.1, 0x7ed99b],
+    [-2.6, 7.0, 0x7ed99b],
+    [2.8, 7.0, 0xffa8cf],
+    [-7.6, 7.0, 0xffc670],
+    [7.6, 7.0, 0x9be7b5],
   ];
-
-  tokens.forEach((token, index) => {
-    const base = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.18, 0.18, 0.045, 26),
-      new THREE.MeshStandardMaterial({
-        color: new THREE.Color(token.color),
-        roughness: 0.42,
-        metalness: 0.18,
-        emissive: new THREE.Color(token.color),
-        emissiveIntensity: 0.15,
-      }),
-    );
-    base.position.set(token.x, 0.31, token.z);
-    base.rotation.x = Math.PI / 2;
-    base.castShadow = true;
-    scene.add(base);
-
-    const label = createLabelMesh(token.label, "#ffffff", {
-      width: 150,
-      height: 62,
-      fontSize: token.label.length > 4 ? 17 : 22,
-      planeWidth: 0.43,
-      planeHeight: 0.19,
-      fill: "rgba(0,0,0,0.22)",
-      stroke: "rgba(255,255,255,0.22)",
+  treeSpots.forEach(([x, z, color], index) => {
+    const tree = new THREE.Group();
+    tree.position.set(x, 0, z);
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.16, 0.8, 10), new THREE.MeshStandardMaterial({ color: 0xb8835a }));
+    trunk.position.y = 0.4;
+    trunk.castShadow = true;
+    tree.add(trunk);
+    const leafMaterial = new THREE.MeshStandardMaterial({ color, roughness: 0.6, flatShading: true });
+    [
+      [0, 1.15, 0, 0.62],
+      [0.3, 0.95, 0.15, 0.42],
+      [-0.28, 1.0, -0.1, 0.45],
+    ].forEach(([lx, ly, lz, r]) => {
+      const leaf = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 1), leafMaterial);
+      leaf.position.set(lx, ly, lz);
+      leaf.castShadow = true;
+      tree.add(leaf);
     });
-    label.position.set(token.x, 0.345, token.z);
-    label.rotation.set(-Math.PI / 2, 0, index % 2 === 0 ? 0.18 : -0.18);
-    scene.add(label);
+    tree.scale.setScalar(0.9 + (index % 3) * 0.15);
+    scene.add(tree);
+  });
+
+  [-5.4, 5.4].forEach((x) => {
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.07, 1.6, 10), new THREE.MeshStandardMaterial({ color: 0x6d5bd0 }));
+    post.position.set(x, 0.8, 6.9);
+    post.castShadow = true;
+    scene.add(post);
+    const bulb = new THREE.Mesh(
+      new THREE.SphereGeometry(0.17, 16, 12),
+      new THREE.MeshStandardMaterial({ color: 0xfff3b0, emissive: 0xfff3b0, emissiveIntensity: 0.8 }),
+    );
+    bulb.position.set(x, 1.65, 6.9);
+    scene.add(bulb);
+  });
+
+  // Bunting strung across the back of the plaza.
+  const flagColors = [0xff6fa8, 0xffc857, 0x5ccfe6, 0x7ed99b, 0xb18cf0];
+  for (let index = 0; index < 22; index += 1) {
+    const t = index / 21;
+    const flag = new THREE.Mesh(
+      new THREE.ConeGeometry(0.18, 0.4, 3),
+      new THREE.MeshStandardMaterial({ color: flagColors[index % flagColors.length] }),
+    );
+    flag.position.set(-8.5 + t * 17, 4.9 - Math.sin(t * Math.PI) * 0.8, -6.3);
+    flag.rotation.x = Math.PI;
+    scene.add(flag);
+  }
+
+  const clouds: THREE.Group[] = [];
+  const cloudMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, flatShading: true });
+  [
+    [-16, 6, -10],
+    [15, 7, -12],
+    [-19, 3.5, 6],
+    [18, 4, 7],
+    [0, 9, -20],
+  ].forEach(([x, y, z], index) => {
+    const cloud = new THREE.Group();
+    [
+      [0, 0, 0, 1.4],
+      [1.3, -0.2, 0.2, 1],
+      [-1.3, -0.25, 0, 1.05],
+      [0.5, 0.5, -0.3, 0.9],
+    ].forEach(([cx, cy, cz, r]) => {
+      const puff = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 1), cloudMaterial);
+      puff.position.set(cx, cy, cz);
+      cloud.add(puff);
+    });
+    cloud.position.set(x, y, z);
+    cloud.userData.phase = index * 1.3;
+    cloud.userData.baseY = y;
+    scene.add(cloud);
+    clouds.push(cloud);
+  });
+
+  return { clouds, spinner: null, beacon: scene.getObjectByName("beacon") ?? null, fountain: null };
+}
+
+function addCenterpiece(scene: THREE.Scene, sceneTitle: string, sceneSubtitle: string, ambient: Ambient) {
+  const accent = getScenarioAccentColor(sceneTitle.toLowerCase());
+  const basin = new THREE.Mesh(new THREE.CylinderGeometry(1.35, 1.45, 0.35, 48), new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.35 }));
+  basin.position.set(0, 0.175, -0.9);
+  basin.castShadow = true;
+  basin.receiveShadow = true;
+  scene.add(basin);
+  const water = new THREE.Mesh(
+    new THREE.CylinderGeometry(1.2, 1.2, 0.05, 48),
+    new THREE.MeshStandardMaterial({ color: 0x7fd8ff, roughness: 0.1, metalness: 0.1, emissive: 0x2a9fd6, emissiveIntensity: 0.25 }),
+  );
+  water.position.set(0, 0.33, -0.9);
+  scene.add(water);
+
+  const spinner = new THREE.Group();
+  spinner.position.set(0, 0.95, -0.9);
+  spinner.scale.setScalar(1.25);
+  addScenarioSpinner(spinner, sceneTitle, accent);
+  spinner.traverse((object) => {
+    if (object instanceof THREE.Mesh) {
+      object.castShadow = true;
+    }
+  });
+  scene.add(spinner);
+  ambient.spinner = spinner;
+
+  const count = 80;
+  const positions = new Float32Array(count * 3);
+  for (let index = 0; index < count; index += 1) {
+    positions.set([Math.cos(index) * 1.0, 0.4 + Math.random() * 1.6, -0.9 + Math.sin(index) * 1.0], index * 3);
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  const fountain = new THREE.Points(geometry, new THREE.PointsMaterial({ color: 0xffffff, size: 0.07, transparent: true, opacity: 0.8, depthWrite: false }));
+  scene.add(fountain);
+  ambient.fountain = fountain;
+
+  const banner = createBannerMesh(sceneTitle, sceneSubtitle);
+  banner.position.set(0, 0.03, 2.3);
+  scene.add(banner);
+}
+
+function updateAmbient(ambient: Ambient, elapsed: number, delta: number) {
+  ambient.clouds.forEach((cloud) => {
+    cloud.position.y = (cloud.userData.baseY as number) + Math.sin(elapsed * 0.4 + (cloud.userData.phase as number)) * 0.4;
+    cloud.position.x += delta * 0.15;
+    if (cloud.position.x > 24) {
+      cloud.position.x = -24;
+    }
+  });
+  if (ambient.spinner) {
+    ambient.spinner.rotation.y += delta * 0.5;
+    ambient.spinner.position.y = 0.95 + Math.sin(elapsed * 1.6) * 0.08;
+  }
+  if (ambient.beacon) {
+    const material = (ambient.beacon as THREE.Mesh).material as THREE.MeshBasicMaterial;
+    material.color.setHSL(0.95, 1, 0.45 + Math.max(0, Math.sin(elapsed * 4)) * 0.3);
+  }
+  if (ambient.fountain) {
+    const attribute = ambient.fountain.geometry.getAttribute("position") as THREE.BufferAttribute;
+    const array = attribute.array as Float32Array;
+    for (let index = 0; index < array.length; index += 3) {
+      array[index + 1] += delta * 0.9;
+      if (array[index + 1] > 2.1) {
+        array[index + 1] = 0.4;
+      }
+    }
+    attribute.needsUpdate = true;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Pawn & movement                                                     */
+/* ------------------------------------------------------------------ */
+
+function createPawnMesh(option: PawnOption) {
+  const group = new THREE.Group();
+  const body = new THREE.Group();
+  group.add(body);
+  const material = new THREE.MeshPhysicalMaterial({
+    color: option.color,
+    roughness: 0.2,
+    metalness: 0.1,
+    clearcoat: 1,
+    clearcoatRoughness: 0.1,
+    emissive: option.color,
+    emissiveIntensity: 0.08,
+  });
+  const trim = new THREE.MeshPhysicalMaterial({ color: 0xffffff, roughness: 0.25, clearcoat: 1 });
+  const profile = [
+    [0, 0],
+    [0.3, 0],
+    [0.31, 0.04],
+    [0.27, 0.08],
+    [0.2, 0.11],
+    [0.13, 0.2],
+    [0.095, 0.36],
+    [0.15, 0.4],
+    [0.15, 0.43],
+    [0.06, 0.46],
+    [0, 0.46],
+  ].map(([x, y]) => new THREE.Vector2(x, y));
+  const stem = new THREE.Mesh(new THREE.LatheGeometry(profile, 40), material);
+  stem.castShadow = true;
+  body.add(stem);
+  const band = new THREE.Mesh(new THREE.TorusGeometry(0.29, 0.03, 10, 48), trim);
+  band.rotation.x = Math.PI / 2;
+  band.position.y = 0.04;
+  body.add(band);
+
+  let head: THREE.Mesh;
+  if (option.key === "spark") {
+    head = new THREE.Mesh(new THREE.IcosahedronGeometry(0.18, 0), material);
+    head.position.y = 0.6;
+  } else if (option.key === "anchor") {
+    head = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.13, 0.2, 32), material);
+    head.position.y = 0.56;
+    const brim = new THREE.Mesh(new THREE.TorusGeometry(0.17, 0.035, 10, 40), trim);
+    brim.rotation.x = Math.PI / 2;
+    brim.position.y = 0.66;
+    body.add(brim);
+  } else if (option.key === "prism") {
+    head = new THREE.Mesh(new THREE.OctahedronGeometry(0.18, 0), material);
+    head.scale.set(1, 1.45, 1);
+    head.position.y = 0.67;
+  } else {
+    head = new THREE.Mesh(new THREE.SphereGeometry(0.17, 32, 24), material);
+    head.position.y = 0.6;
+  }
+  head.castShadow = true;
+  body.add(head);
+
+  // Eyes give the piece some personality.
+  const eyeMaterial = new THREE.MeshBasicMaterial({ color: 0x1c1633 });
+  [-0.06, 0.06].forEach((x) => {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.028, 12, 8), eyeMaterial);
+    eye.scale.set(1, 1.4, 0.6);
+    eye.position.set(x, head.position.y + 0.02, 0.16);
+    body.add(eye);
+  });
+
+  group.scale.setScalar(1.55);
+  return group;
+}
+
+interface HopState {
+  queue: number[];
+  current: { from: number; to: number; start: number } | null;
+  nodeId: number;
+  stepCount: number;
+  stepsAfter: number;
+  onHop: (step: number) => void;
+  onLand: (nodeId: number) => void;
+}
+
+function updateHop(state: SceneState, now: number, reducedMotion: boolean) {
+  const hop = state.hop;
+  if (!hop.current && hop.queue.length > 0) {
+    const to = hop.queue.shift() as number;
+    hop.current = { from: hop.nodeId, to, start: now };
+    hop.stepCount += 1;
+    hop.onHop(hop.stepCount);
+  }
+  if (!hop.current) {
+    return false;
+  }
+
+  const t = Math.min(1, (now - hop.current.start) / (HOP_MS * 0.9));
+  const from = state.nodes[hop.current.from];
+  const to = state.nodes[hop.current.to];
+  const eased = easeInOutSine(t);
+  state.pawnGroup.position.set(
+    THREE.MathUtils.lerp(from.x, to.x, eased),
+    SPACE_Y + Math.sin(Math.PI * t) * (reducedMotion ? 0.15 : 0.85),
+    THREE.MathUtils.lerp(from.z, to.z, eased),
+  );
+  state.pawnGroup.rotation.y = lerpAngle(state.pawnGroup.rotation.y, facingBetween(from, to), 0.3);
+  const body = state.pawnGroup.children[0];
+  const stretch = 1 + Math.sin(Math.PI * t) * 0.14;
+  body.scale.set(1 / Math.sqrt(stretch), stretch, 1 / Math.sqrt(stretch));
+  body.position.y = 0;
+
+  if (t >= 1) {
+    hop.nodeId = hop.current.to;
+    hop.current = null;
+    body.scale.set(1.18, 0.8, 1.18);
+    state.effects.push({ kind: "squash", age: 0, life: 0.25, object: body });
+    state.ring.position.set(to.x, SPACE_Y + 0.01, to.z);
+    const space = state.spaceMeshes[to.id];
+    if (space) {
+      state.effects.push({ kind: "bounce", age: 0, life: 0.3, object: space });
+    }
+    if (hop.queue.length === 0 && hop.stepsAfter === 0) {
+      hop.onLand(hop.nodeId);
+      spawnBurst(state, to.x, to.z, toneMeta[to.tone].color);
+    }
+  }
+  return true;
+}
+
+/* ------------------------------------------------------------------ */
+/* Step counter & junction arrows                                      */
+/* ------------------------------------------------------------------ */
+
+interface CounterSprite {
+  sprite: THREE.Sprite;
+  canvas: HTMLCanvasElement;
+  texture: THREE.CanvasTexture;
+  value: number;
+}
+
+function createCounterSprite(): CounterSprite {
+  const canvas = document.createElement("canvas");
+  canvas.width = 160;
+  canvas.height = 160;
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false }));
+  sprite.renderOrder = 20;
+  sprite.scale.set(0.9, 0.9, 1);
+  sprite.visible = false;
+  return { sprite, canvas, texture, value: -1 };
+}
+
+function drawCounter(counter: CounterSprite, value: number) {
+  const ctx = counter.canvas.getContext("2d");
+  if (!ctx) {
+    return;
+  }
+  ctx.clearRect(0, 0, 160, 160);
+  ctx.fillStyle = "#ffffff";
+  ctx.beginPath();
+  ctx.arc(80, 80, 70, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.lineWidth = 10;
+  ctx.strokeStyle = "#2f80ff";
+  ctx.stroke();
+  ctx.fillStyle = "#1d3f9e";
+  ctx.font = `900 92px ${FONT}`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(String(value), 80, 86);
+  counter.texture.needsUpdate = true;
+  counter.value = value;
+}
+
+function updateCounter(state: SceneState, elapsed: number) {
+  const hop = state.hop;
+  const remaining = hop.queue.length + (hop.current ? 1 : 0) + hop.stepsAfter;
+  state.counter.sprite.visible = remaining > 0;
+  if (remaining <= 0) {
+    return;
+  }
+  if (remaining !== state.counter.value) {
+    drawCounter(state.counter, remaining);
+  }
+  const position = state.pawnGroup.position;
+  state.counter.sprite.position.set(position.x, position.y + 2.0 + Math.sin(elapsed * 6) * 0.04, position.z);
+}
+
+function createJunctionArrow(color: number) {
+  const group = new THREE.Group();
+  const shape = new THREE.Shape();
+  shape.moveTo(0, 0.55);
+  shape.lineTo(0.42, 0.05);
+  shape.lineTo(0.17, 0.05);
+  shape.lineTo(0.17, -0.45);
+  shape.lineTo(-0.17, -0.45);
+  shape.lineTo(-0.17, 0.05);
+  shape.lineTo(-0.42, 0.05);
+  shape.closePath();
+  const geometry = new THREE.ExtrudeGeometry(shape, { depth: 0.14, bevelEnabled: true, bevelSize: 0.04, bevelThickness: 0.04, bevelSegments: 3 });
+  geometry.translate(0, 0, -0.07);
+  geometry.rotateX(Math.PI / 2);
+  const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.35, roughness: 0.3 }));
+  mesh.castShadow = true;
+  group.add(mesh);
+  // Generous invisible hit target for easy clicking.
+  group.add(new THREE.Mesh(new THREE.SphereGeometry(0.7, 12, 8), new THREE.MeshBasicMaterial({ visible: false })));
+  return group;
+}
+
+function updateArrows(state: SceneState, elapsed: number) {
+  const from = state.nodes[state.hop.nodeId];
+  state.arrows.forEach((arrow, index) => {
+    const direction = arrow.userData.direction as THREE.Vector3;
+    const pulse = Math.sin(elapsed * 6 + index) * 0.12;
+    arrow.position.y = (arrow.userData.baseY as number) + Math.abs(Math.sin(elapsed * 3 + index)) * 0.25;
+    arrow.position.x = from.x + direction.x * (1.15 + pulse);
+    arrow.position.z = from.z + direction.z * (1.15 + pulse);
   });
 }
 
-function addScenarioSetPiece(scene: THREE.Scene, sceneTitle: string, sceneIndustry: string) {
-  const scenario = sceneTitle.toLowerCase();
-  const accent = getScenarioAccentColor(scenario);
-  const pedestalMaterial = new THREE.MeshStandardMaterial({
-    color: 0x08221e,
-    roughness: 0.55,
-    metalness: 0.16,
-    emissive: accent,
-    emissiveIntensity: 0.12,
-  });
-  const glowMaterial = new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: 0.2, depthWrite: false });
+/* ------------------------------------------------------------------ */
+/* Floating dice                                                       */
+/* ------------------------------------------------------------------ */
 
-  const pedestal = new THREE.Mesh(new THREE.CylinderGeometry(0.72, 0.82, 0.08, 42), pedestalMaterial);
-  pedestal.position.set(0, 0.315, -0.08);
+interface DieModel {
+  group: THREE.Group;
+  normals: THREE.Vector3[];
+  values: number[];
+  axis: THREE.Vector3;
+  settleFrom: THREE.Quaternion;
+  final: THREE.Quaternion;
+}
+
+interface FloatingDice {
+  d6: DieModel;
+  d20: DieModel;
+  mode: "hidden" | "idle" | "rolling";
+  start: number;
+  value: DiceRoll | null;
+  finalized: boolean;
+  visible: number;
+}
+
+function createFloatingDice(scene: THREE.Scene): FloatingDice {
+  const d6 = createD6();
+  const d20 = createD20();
+  scene.add(d6.group, d20.group);
+  d6.group.scale.setScalar(0.001);
+  d20.group.scale.setScalar(0.001);
+  return { d6, d20, mode: "hidden", start: 0, value: null, finalized: false, visible: 0 };
+}
+
+const spinQuaternion = new THREE.Quaternion();
+
+function updateDice(state: SceneState, now: number, delta: number, elapsed: number) {
+  const rig = state.dice;
+  const camera = state.camera;
+  const pawn = state.pawnGroup.position;
+  const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0).setY(0).normalize();
+
+  const targetVisible = rig.mode === "hidden" ? 0 : 1;
+  rig.visible += (targetVisible - rig.visible) * Math.min(1, delta * 9);
+  const pop = rig.mode === "rolling" ? 1 + Math.max(0, 1 - (now - rig.start) / 220) * 0.25 : 1;
+
+  const dice = [
+    { die: rig.d6, offset: -0.62 },
+    { die: rig.d20, offset: 0.62 },
+  ];
+  dice.forEach(({ die, offset }, index) => {
+    die.group.position.set(pawn.x + right.x * offset, SPACE_Y + 2.25 + Math.sin(elapsed * 2.4 + index) * 0.08, pawn.z + right.z * offset);
+    die.group.scale.setScalar(Math.max(0.001, rig.visible * pop));
+    die.group.visible = rig.visible > 0.02;
+  });
+
+  if (rig.mode === "idle") {
+    dice.forEach(({ die }) => die.group.quaternion.multiply(spinQuaternion.setFromAxisAngle(die.axis, delta * 1.4)));
+  } else if (rig.mode === "rolling" && rig.value) {
+    const age = now - rig.start;
+    if (age < SPIN_MS) {
+      const speed = 16 * (1 - (age / SPIN_MS) * 0.4);
+      dice.forEach(({ die }) => die.group.quaternion.multiply(spinQuaternion.setFromAxisAngle(die.axis, delta * speed)));
+    } else {
+      if (!rig.finalized) {
+        rig.finalized = true;
+        const value = rig.value;
+        dice.forEach(({ die }) => {
+          die.settleFrom.copy(die.group.quaternion);
+          const target = die === rig.d6 ? value.d6 : value.d20;
+          const index = Math.max(0, die.values.indexOf(target));
+          const toCamera = camera.position.clone().sub(die.group.position).normalize();
+          die.final.setFromUnitVectors(die.normals[index], toCamera);
+        });
+      }
+      const t = Math.min(1, (age - SPIN_MS) / SETTLE_MS);
+      const eased = Math.min(1, easeOutBack(t));
+      dice.forEach(({ die }) => die.group.quaternion.slerpQuaternions(die.settleFrom, die.final, eased));
+    }
+  }
+}
+
+function createD6(): DieModel {
+  const size = 0.62;
+  const values = [3, 4, 1, 6, 2, 5];
+  const materials = values.map((value) => new THREE.MeshPhysicalMaterial({ map: createPipTexture(value), roughness: 0.25, clearcoat: 1 }));
+  const mesh = new THREE.Mesh(new RoundedBoxGeometry(size, size, size, 4, 0.1), materials);
+  mesh.castShadow = true;
+  const group = new THREE.Group();
+  group.add(mesh);
+  const normals = [
+    new THREE.Vector3(1, 0, 0),
+    new THREE.Vector3(-1, 0, 0),
+    new THREE.Vector3(0, 1, 0),
+    new THREE.Vector3(0, -1, 0),
+    new THREE.Vector3(0, 0, 1),
+    new THREE.Vector3(0, 0, -1),
+  ];
+  return { group, normals, values, axis: new THREE.Vector3(0.6, 1, 0.3).normalize(), settleFrom: new THREE.Quaternion(), final: new THREE.Quaternion() };
+}
+
+function createD20(): DieModel {
+  const radius = 0.44;
+  const phi = (1 + Math.sqrt(5)) / 2;
+  const raw = [
+    [-1, phi, 0], [1, phi, 0], [-1, -phi, 0], [1, -phi, 0],
+    [0, -1, phi], [0, 1, phi], [0, -1, -phi], [0, 1, -phi],
+    [phi, 0, -1], [phi, 0, 1], [-phi, 0, -1], [-phi, 0, 1],
+  ].map(([x, y, z]) => new THREE.Vector3(x, y, z).normalize().multiplyScalar(radius));
+
+  const faces: number[][] = [];
+  const edge = raw[0].distanceTo(raw[1]);
+  for (let a = 0; a < 12; a += 1) {
+    for (let b = a + 1; b < 12; b += 1) {
+      for (let c = b + 1; c < 12; c += 1) {
+        const close = (i: number, j: number) => Math.abs(raw[i].distanceTo(raw[j]) - edge) < 1e-4;
+        if (close(a, b) && close(b, c) && close(a, c)) {
+          const normal = new THREE.Vector3().subVectors(raw[b], raw[a]).cross(new THREE.Vector3().subVectors(raw[c], raw[a]));
+          const centroid = new THREE.Vector3().add(raw[a]).add(raw[b]).add(raw[c]);
+          faces.push(normal.dot(centroid) > 0 ? [a, b, c] : [a, c, b]);
+        }
+      }
+    }
+  }
+  const normals = faces.map((face) => new THREE.Vector3().add(raw[face[0]]).add(raw[face[1]]).add(raw[face[2]]).normalize());
+  // Opposite faces sum to 21, like a real d20.
+  const values = new Array<number>(faces.length).fill(0);
+  let next = 1;
+  normals.forEach((normal, index) => {
+    if (values[index]) {
+      return;
+    }
+    const opposite = normals.findIndex((other, otherIndex) => otherIndex !== index && other.dot(normal) < -0.999);
+    values[index] = next;
+    if (opposite >= 0) {
+      values[opposite] = 21 - next;
+    }
+    next += 1;
+  });
+
+  const positions: number[] = [];
+  const uvs: number[] = [];
+  faces.forEach((face, index) => {
+    face.forEach((vertex) => positions.push(raw[vertex].x, raw[vertex].y, raw[vertex].z));
+    const u0 = (index % 5) / 5;
+    const v0 = 1 - (Math.floor(index / 5) + 1) / 4;
+    uvs.push(u0 + 0.1, v0 + 0.23, u0 + 0.012, v0 + 0.025, u0 + 0.188, v0 + 0.025);
+  });
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+  geometry.computeVertexNormals();
+  const mesh = new THREE.Mesh(geometry, new THREE.MeshPhysicalMaterial({ map: createD20Atlas(values), roughness: 0.2, clearcoat: 1, flatShading: true }));
+  mesh.castShadow = true;
+  const group = new THREE.Group();
+  group.add(mesh);
+  return { group, normals, values, axis: new THREE.Vector3(-0.4, 1, 0.5).normalize(), settleFrom: new THREE.Quaternion(), final: new THREE.Quaternion() };
+}
+
+/* ------------------------------------------------------------------ */
+/* Card decks                                                          */
+/* ------------------------------------------------------------------ */
+
+interface DeckRig {
+  top: THREE.Mesh;
+  drawStart: number;
+  base: THREE.Vector3;
+  rotation: number;
+}
+
+function createDeck(scene: THREE.Scene, kind: "prompt" | "inject", anisotropy: number): DeckRig {
+  const slot = DECK_SLOTS[kind];
+  const back = new THREE.CanvasTexture(drawCardBack(kind));
+  back.colorSpace = THREE.SRGBColorSpace;
+  back.anisotropy = anisotropy;
+  const edge = new THREE.MeshStandardMaterial({ color: 0xfffaf0, roughness: 0.8 });
+  const materials = [edge, edge, new THREE.MeshStandardMaterial({ map: back, roughness: 0.5 }), edge, edge, edge];
+  const box = new THREE.BoxGeometry(0.98, 0.03, 1.32);
+
+  const pedestal = new THREE.Mesh(
+    new RoundedBoxGeometry(1.3, 0.2, 1.65, 3, 0.08),
+    new THREE.MeshStandardMaterial({ color: kind === "prompt" ? 0x8ee6c9 : 0xffb58a, roughness: 0.45 }),
+  );
+  pedestal.position.set(slot.x, 0.1, slot.z);
+  pedestal.rotation.y = slot.rotation;
   pedestal.castShadow = true;
   pedestal.receiveShadow = true;
   scene.add(pedestal);
 
-  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.83, 0.012, 8, 80), glowMaterial);
-  ring.position.set(0, 0.37, -0.08);
-  ring.rotation.x = Math.PI / 2;
-  scene.add(ring);
-
-  const pulse = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.48, 0.08, 0.74, 32, 1, true),
-    new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: 0.075, depthWrite: false }),
-  );
-  pulse.position.set(0, 0.71, -0.08);
-  scene.add(pulse);
-
-  const spinner = new THREE.Group();
-  spinner.position.set(0, 0.42, -0.08);
-  if (scenario.includes("ransom")) {
-    addRansomwareSetPiece(spinner, accent);
-  } else if (scenario.includes("phishing") || scenario.includes("email")) {
-    addPhishingSetPiece(spinner, accent);
-  } else if (scenario.includes("exfil")) {
-    addDataExfilSetPiece(spinner, accent);
-  } else if (scenario.includes("admin")) {
-    addAdminSetPiece(spinner, accent);
-  } else if (scenario.includes("laptop")) {
-    addLaptopSetPiece(spinner, accent);
-  } else if (scenario.includes("vendor") || scenario.includes("third")) {
-    addVendorSetPiece(spinner, accent);
-  } else if (scenario.includes("insider")) {
-    addInsiderSetPiece(spinner, accent);
-  } else if (scenario.includes("cloud")) {
-    addCloudSetPiece(spinner, accent);
-  } else {
-    addShieldSetPiece(spinner, accent);
+  const stack = new THREE.Group();
+  stack.position.set(slot.x, 0.2, slot.z);
+  stack.rotation.y = slot.rotation;
+  for (let index = 0; index < 8; index += 1) {
+    const card = new THREE.Mesh(box, materials);
+    card.position.set(Math.sin(index * 2.1) * 0.015, 0.015 + index * 0.031, Math.cos(index * 1.7) * 0.015);
+    card.rotation.y = Math.sin(index * 3.3) * 0.03;
+    card.castShadow = true;
+    stack.add(card);
   }
-  scene.add(spinner);
+  scene.add(stack);
 
-  const industryLabel = createLabelMesh(sceneIndustry.toUpperCase(), "#b8fff0", {
-    width: 220,
-    height: 54,
-    fontSize: 17,
-    planeWidth: 0.9,
-    planeHeight: 0.22,
-    fill: "rgba(6,12,20,0.66)",
-    stroke: "rgba(35,211,155,0.24)",
-  });
-  industryLabel.position.set(0, 0.338, 1.36);
-  industryLabel.rotation.x = -Math.PI / 2;
-  scene.add(industryLabel);
-
-  return spinner;
+  const top = new THREE.Mesh(box, materials);
+  top.visible = false;
+  top.castShadow = true;
+  scene.add(top);
+  return { top, drawStart: 0, base: new THREE.Vector3(slot.x, 0.2 + 0.015 + 8 * 0.031, slot.z), rotation: slot.rotation };
 }
 
-function addParticipantSeats(scene: THREE.Scene, sceneOrganizationSize: string) {
-  const participantCount = getParticipantCount(sceneOrganizationSize);
-  const seatMaterial = new THREE.MeshStandardMaterial({ color: 0x1f2937, roughness: 0.62, metalness: 0.12 });
-  const colors = [0x23d39b, 0xf5b83d, 0x68a8ff, 0xd98cff, 0xf97316, 0x5eead4, 0xe5e7eb];
-  const spacing = participantCount > 1 ? 5.8 / (participantCount - 1) : 0;
-
-  for (let index = 0; index < participantCount; index += 1) {
-    const x = participantCount > 1 ? -2.9 + spacing * index : 0;
-    const z = -3.33;
-    const seat = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.09, 0.32), seatMaterial);
-    seat.position.set(x, 0.13, z);
-    seat.castShadow = true;
-    scene.add(seat);
-
-    const tokenMaterial = new THREE.MeshStandardMaterial({
-      color: colors[index % colors.length],
-      roughness: 0.42,
-      metalness: 0.16,
-      emissive: colors[index % colors.length],
-      emissiveIntensity: 0.12,
-    });
-    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.16, 0.05, 18), tokenMaterial);
-    base.position.set(x, 0.2, z + 0.08);
-    base.castShadow = true;
-    scene.add(base);
-
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.12, 14, 10), tokenMaterial);
-    head.position.set(x, 0.37, z + 0.08);
-    head.castShadow = true;
-    scene.add(head);
-  }
-}
-
-function addRansomwareSetPiece(group: THREE.Group, accent: number) {
-  const fileMaterial = makeSetPieceMaterial(0x102e42, accent, 0.28);
-  const lockMaterial = makeSetPieceMaterial(accent, accent, 0.35);
-  [-0.24, 0.05, 0.28].forEach((x, index) => {
-    const file = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.34 + index * 0.04, 0.055), fileMaterial);
-    file.position.set(x, 0.22, -0.02 + index * 0.04);
-    file.rotation.y = -0.22 + index * 0.16;
-    file.castShadow = true;
-    group.add(file);
-  });
-
-  const body = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.33, 0.2), lockMaterial);
-  body.position.set(0, 0.23, 0.18);
-  body.castShadow = true;
-  group.add(body);
-
-  const shackle = new THREE.Mesh(new THREE.TorusGeometry(0.21, 0.035, 10, 28), lockMaterial);
-  shackle.position.set(0, 0.47, 0.18);
-  shackle.castShadow = true;
-  group.add(shackle);
-}
-
-function addPhishingSetPiece(group: THREE.Group, accent: number) {
-  const mailMaterial = makeSetPieceMaterial(0xf8fafc, accent, 0.08);
-  const lineMaterial = new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: 0.8 });
-  const envelope = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.45, 0.08), mailMaterial);
-  envelope.position.set(0, 0.28, 0);
-  envelope.castShadow = true;
-  group.add(envelope);
-
-  const flap = new THREE.Mesh(new THREE.ConeGeometry(0.32, 0.08, 3), lineMaterial);
-  flap.position.set(0, 0.29, 0.055);
-  flap.rotation.z = Math.PI;
-  group.add(flap);
-
-  const lure = new THREE.Mesh(new THREE.TorusGeometry(0.17, 0.025, 8, 28), makeSetPieceMaterial(accent, accent, 0.38));
-  lure.position.set(0.48, 0.38, 0.08);
-  lure.rotation.y = Math.PI / 2;
-  group.add(lure);
-}
-
-function addDataExfilSetPiece(group: THREE.Group, accent: number) {
-  const databaseMaterial = makeSetPieceMaterial(0x1d4ed8, accent, 0.25);
-  const streamMaterial = makeSetPieceMaterial(accent, accent, 0.42);
-  [-0.08, 0.08, 0.24].forEach((y) => {
-    const disk = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 0.07, 28), databaseMaterial);
-    disk.position.set(-0.28, y + 0.2, 0);
-    disk.castShadow = true;
-    group.add(disk);
-  });
-
-  for (let index = 0; index < 5; index += 1) {
-    const packet = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.08), streamMaterial);
-    packet.position.set(-0.02 + index * 0.16, 0.32 + Math.sin(index) * 0.06, 0.02);
-    packet.rotation.set(index * 0.3, index * 0.4, index * 0.2);
-    group.add(packet);
-  }
-
-  const external = new THREE.Mesh(new THREE.OctahedronGeometry(0.2), streamMaterial);
-  external.position.set(0.72, 0.34, 0.02);
-  external.castShadow = true;
-  group.add(external);
-}
-
-function addAdminSetPiece(group: THREE.Group, accent: number) {
-  const material = makeSetPieceMaterial(accent, accent, 0.36);
-  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.18, 0.035, 10, 30), material);
-  ring.position.set(-0.3, 0.32, 0);
-  ring.rotation.y = Math.PI / 2;
-  group.add(ring);
-
-  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.72, 16), material);
-  shaft.position.set(0.12, 0.32, 0);
-  shaft.rotation.z = Math.PI / 2;
-  group.add(shaft);
-
-  const tooth = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.2, 0.08), material);
-  tooth.position.set(0.48, 0.22, 0);
-  group.add(tooth);
-}
-
-function addLaptopSetPiece(group: THREE.Group, accent: number) {
-  const darkMaterial = makeSetPieceMaterial(0x111827, accent, 0.12);
-  const glowMaterial = makeSetPieceMaterial(accent, accent, 0.35);
-  const base = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.08, 0.52), darkMaterial);
-  base.position.set(0, 0.17, 0.12);
-  base.castShadow = true;
-  group.add(base);
-
-  const screen = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.48, 0.06), darkMaterial);
-  screen.position.set(0, 0.45, -0.12);
-  screen.rotation.x = -0.22;
-  group.add(screen);
-
-  const warning = new THREE.Mesh(new THREE.OctahedronGeometry(0.15), glowMaterial);
-  warning.position.set(0, 0.48, -0.07);
-  group.add(warning);
-}
-
-function addVendorSetPiece(group: THREE.Group, accent: number) {
-  const material = makeSetPieceMaterial(accent, accent, 0.34);
-  for (let index = 0; index < 4; index += 1) {
-    const link = new THREE.Mesh(new THREE.TorusGeometry(0.16, 0.035, 10, 28), material);
-    link.position.set(-0.36 + index * 0.24, 0.3, 0);
-    link.rotation.set(Math.PI / 2, index % 2 === 0 ? 0 : Math.PI / 2, 0);
-    link.castShadow = true;
-    group.add(link);
-  }
-}
-
-function addInsiderSetPiece(group: THREE.Group, accent: number) {
-  const badgeMaterial = makeSetPieceMaterial(0x1f2937, accent, 0.16);
-  const accentMaterial = makeSetPieceMaterial(accent, accent, 0.34);
-  const badge = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.7, 0.06), badgeMaterial);
-  badge.position.set(0, 0.36, 0);
-  badge.castShadow = true;
-  group.add(badge);
-
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.12, 16, 10), accentMaterial);
-  head.position.set(0, 0.5, 0.05);
-  group.add(head);
-
-  const torso = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.22, 18), accentMaterial);
-  torso.position.set(0, 0.27, 0.05);
-  group.add(torso);
-}
-
-function addCloudSetPiece(group: THREE.Group, accent: number) {
-  const cloudMaterial = makeSetPieceMaterial(0xe0f2fe, accent, 0.2);
-  const bucketMaterial = makeSetPieceMaterial(accent, accent, 0.34);
-  [
-    [-0.18, 0.34, 0],
-    [0.04, 0.42, 0.02],
-    [0.24, 0.34, 0],
-  ].forEach(([x, y, z]) => {
-    const cloud = new THREE.Mesh(new THREE.SphereGeometry(0.18, 18, 12), cloudMaterial);
-    cloud.position.set(x, y, z);
-    group.add(cloud);
-  });
-
-  const bucket = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.18, 0.34), bucketMaterial);
-  bucket.position.set(0.02, 0.16, 0.04);
-  group.add(bucket);
-}
-
-function addShieldSetPiece(group: THREE.Group, accent: number) {
-  const material = makeSetPieceMaterial(accent, accent, 0.34);
-  const shield = new THREE.Mesh(new THREE.ConeGeometry(0.36, 0.72, 4), material);
-  shield.position.set(0, 0.34, 0);
-  shield.rotation.y = Math.PI / 4;
-  shield.castShadow = true;
-  group.add(shield);
-}
-
-function makeSetPieceMaterial(color: number, emissive: number, emissiveIntensity: number) {
-  return new THREE.MeshStandardMaterial({
-    color,
-    roughness: 0.38,
-    metalness: 0.16,
-    emissive,
-    emissiveIntensity,
+function updateDecks(decks: Record<"prompt" | "inject", DeckRig>, now: number) {
+  (Object.values(decks) as DeckRig[]).forEach((deck) => {
+    if (!deck.drawStart) {
+      return;
+    }
+    const t = (now - deck.drawStart) / 1100;
+    if (t >= 1) {
+      deck.top.visible = false;
+      deck.drawStart = 0;
+      return;
+    }
+    deck.top.visible = true;
+    const lift = easeOutCubic(Math.min(1, t * 2.2));
+    const fly = easeInCubic(Math.max(0, (t - 0.45) / 0.55));
+    deck.top.position.set(deck.base.x, deck.base.y + lift * 1.3 + fly * 3, deck.base.z + fly * 3);
+    deck.top.rotation.set(-fly * 0.9, deck.rotation * (1 - lift), Math.PI * Math.min(1, t * 1.8));
+    deck.top.scale.setScalar(1 + lift * 0.3 - fly * 0.7);
   });
 }
 
-function getScenarioAccentColor(scenario: string) {
-  if (scenario.includes("ransom")) {
-    return 0xfbbf24;
+function drawCardBack(kind: "prompt" | "inject") {
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 690;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    return canvas;
   }
-
-  if (scenario.includes("phishing") || scenario.includes("email")) {
-    return 0x38bdf8;
+  const primary = kind === "prompt" ? "#2fbf8f" : "#ff7a3d";
+  const secondary = kind === "prompt" ? "#1a8a7a" : "#d6452c";
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, 512, 690);
+  const gradient = ctx.createLinearGradient(0, 0, 512, 690);
+  gradient.addColorStop(0, primary);
+  gradient.addColorStop(1, secondary);
+  ctx.fillStyle = gradient;
+  roundRect(ctx, 22, 22, 468, 646, 34);
+  ctx.fill();
+  ctx.fillStyle = "rgba(255,255,255,0.12)";
+  for (let y = 0; y < 690; y += 60) {
+    for (let x = (y / 60) % 2 === 0 ? 0 : 30; x < 512; x += 60) {
+      ctx.beginPath();
+      ctx.arc(x, y, 10, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
-
-  if (scenario.includes("exfil")) {
-    return 0x22d3ee;
-  }
-
-  if (scenario.includes("admin")) {
-    return 0xc4b5fd;
-  }
-
-  if (scenario.includes("laptop")) {
-    return 0x93c5fd;
-  }
-
-  if (scenario.includes("vendor") || scenario.includes("third")) {
-    return 0xfb923c;
-  }
-
-  if (scenario.includes("insider")) {
-    return 0xf472b6;
-  }
-
-  if (scenario.includes("cloud")) {
-    return 0x60a5fa;
-  }
-
-  return 0x23d39b;
+  ctx.fillStyle = "#ffffff";
+  ctx.beginPath();
+  ctx.arc(256, 300, 120, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = secondary;
+  ctx.font = `900 170px ${FONT}`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(kind === "prompt" ? "?" : "!", 256, 310);
+  ctx.fillStyle = "#ffffff";
+  ctx.font = `900 58px ${FONT}`;
+  setLetterSpacing(ctx, "6px");
+  ctx.fillText(kind === "prompt" ? "PROMPT" : "TWIST", 256, 520);
+  return canvas;
 }
 
-function getParticipantCount(sceneOrganizationSize: string) {
-  if (sceneOrganizationSize.includes("1000")) {
-    return 7;
-  }
+/* ------------------------------------------------------------------ */
+/* Effects                                                             */
+/* ------------------------------------------------------------------ */
 
-  if (sceneOrganizationSize.includes("501")) {
-    return 6;
-  }
+type Effect =
+  | { kind: "ring"; age: number; life: number; object: THREE.Mesh }
+  | { kind: "sparks"; age: number; life: number; object: THREE.Points; velocities: Float32Array }
+  | { kind: "squash"; age: number; life: number; object: THREE.Object3D }
+  | { kind: "bounce"; age: number; life: number; object: THREE.Object3D };
 
-  if (sceneOrganizationSize.includes("101")) {
-    return 5;
-  }
-
-  if (sceneOrganizationSize.includes("26")) {
-    return 4;
-  }
-
-  return 3;
-}
-
-function createHighlightRing() {
+function spawnBurst(state: SceneState, x: number, z: number, color: string | number = 0xffd34d) {
   const ring = new THREE.Mesh(
-    new THREE.TorusGeometry(0.42, 0.025, 10, 42),
-    new THREE.MeshBasicMaterial({ color: 0xfbbf24, transparent: true, opacity: 0.95 }),
+    new THREE.RingGeometry(0.45, 0.58, 48),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, depthWrite: false, side: THREE.DoubleSide }),
   );
-  ring.rotation.x = Math.PI / 2;
-  return ring;
-}
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.set(x, SPACE_Y + 0.03, z);
+  state.scene.add(ring);
+  state.effects.push({ kind: "ring", age: 0, life: 0.7, object: ring });
 
-function createRevealCard() {
-  const group = new THREE.Group();
-  const card = new THREE.Mesh(
-    new THREE.BoxGeometry(1.32, 0.05, 1.72),
-    new THREE.MeshStandardMaterial({ color: 0xf4f1e8, roughness: 0.52, metalness: 0.02 }),
-  );
-  card.castShadow = true;
-  group.add(card);
-
-  const panel = new THREE.Mesh(
-    new THREE.BoxGeometry(1.1, 0.012, 1.32),
-    new THREE.MeshBasicMaterial({ color: 0x0e2f2b }),
-  );
-  panel.position.y = 0.035;
-  group.add(panel);
-
-  const label = createLabelMesh("DRAW", "#23d39b", { width: 180, height: 80, fontSize: 32, planeWidth: 0.72, planeHeight: 0.32 });
-  label.position.y = 0.05;
-  label.rotation.x = -Math.PI / 2;
-  group.add(label);
-
-  group.position.set(0, 0.5, -0.1);
-  group.rotation.y = -0.3;
-  return group;
-}
-
-function createSparkleField() {
-  const count = 70;
+  const count = 40;
   const positions = new Float32Array(count * 3);
+  const velocities = new Float32Array(count * 3);
   for (let index = 0; index < count; index += 1) {
-    positions[index * 3] = -4.1 + Math.random() * 8.2;
-    positions[index * 3 + 1] = 0.38 + Math.random() * 1.8;
-    positions[index * 3 + 2] = -3.1 + Math.random() * 6.2;
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 1 + Math.random() * 1.8;
+    positions.set([x, SPACE_Y + 0.2, z], index * 3);
+    velocities.set([Math.cos(angle) * speed, 2 + Math.random() * 2.5, Math.sin(angle) * speed], index * 3);
   }
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-  const material = new THREE.PointsMaterial({ color: 0x80ffe1, size: 0.035, transparent: true, opacity: 0.32, depthWrite: false });
-  return new THREE.Points(geometry, material);
+  const sparks = new THREE.Points(geometry, new THREE.PointsMaterial({ color, size: 0.12, transparent: true, depthWrite: false }));
+  state.scene.add(sparks);
+  state.effects.push({ kind: "sparks", age: 0, life: 0.95, object: sparks, velocities });
 }
 
-function createD20Mesh() {
-  const group = new THREE.Group();
-  const diceGeometry = new THREE.IcosahedronGeometry(0.4, 0);
-  const diceMaterial = new THREE.MeshStandardMaterial({ color: 0xf4b83c, roughness: 0.32, metalness: 0.18, emissive: 0x4c2c05, emissiveIntensity: 0.08 });
-  const dice = new THREE.Mesh(diceGeometry, diceMaterial);
-  dice.castShadow = true;
-  group.add(dice);
-
-  const edges = new THREE.LineSegments(
-    new THREE.EdgesGeometry(diceGeometry),
-    new THREE.LineBasicMaterial({ color: 0x56340d, transparent: true, opacity: 0.82 }),
-  );
-  group.add(edges);
-
-  const mark = createLabelMesh("20", "#3b2507", {
-    width: 96,
-    height: 96,
-    fontSize: 42,
-    planeWidth: 0.34,
-    planeHeight: 0.34,
-    fill: "rgba(244,184,60,0.12)",
-    stroke: "rgba(59,37,7,0.22)",
-  });
-  mark.position.set(0, 0.405, 0);
-  mark.rotation.x = -Math.PI / 2;
-  group.add(mark);
-
-  return group;
-}
-
-function createPawnMesh(pawn: PawnOption) {
-  const group = new THREE.Group();
-  const mainMaterial = new THREE.MeshStandardMaterial({ color: pawn.color, roughness: 0.34, metalness: 0.2, emissive: pawn.color, emissiveIntensity: 0.12 });
-  const accentMaterial = new THREE.MeshStandardMaterial({ color: pawn.accent, roughness: 0.44, metalness: 0.12 });
-  const brightMaterial = new THREE.MeshBasicMaterial({ color: pawn.color, transparent: true, opacity: 0.42 });
-
-  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.34, 0.18, 24), accentMaterial);
-  base.position.y = 0.05;
-  base.castShadow = true;
-  group.add(base);
-
-  const body =
-    pawn.key === "spark"
-      ? new THREE.Mesh(new THREE.SphereGeometry(0.27, 22, 16), mainMaterial)
-      : pawn.key === "anchor"
-        ? new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.25, 0.5, 22), mainMaterial)
-        : pawn.key === "prism"
-          ? new THREE.Mesh(new THREE.OctahedronGeometry(0.34), mainMaterial)
-          : new THREE.Mesh(new THREE.ConeGeometry(0.27, 0.58, 22), mainMaterial);
-  body.position.y = 0.4;
-  body.castShadow = true;
-  group.add(body);
-
-  const badge = new THREE.Mesh(
-    pawn.key === "spark" ? new THREE.TetrahedronGeometry(0.08) : new THREE.SphereGeometry(0.07, 14, 10),
-    brightMaterial,
-  );
-  badge.position.set(0, 0.72, 0);
-  group.add(badge);
-
-  const glow = new THREE.PointLight(pawn.color, 0.82, 1.8);
-  glow.position.set(0, 0.72, 0);
-  group.add(glow);
-
-  return group;
-}
-
-function addFlatBar(scene: THREE.Scene, x: number, y: number, z: number, width: number, depth: number, material: THREE.Material) {
-  const bar = new THREE.Mesh(new THREE.BoxGeometry(width, 0.03, depth), material);
-  bar.position.set(x, y, z);
-  bar.castShadow = true;
-  bar.receiveShadow = true;
-  scene.add(bar);
-}
-
-function addTrace(scene: THREE.Scene, startX: number, startZ: number, endX: number, endZ: number, material: THREE.Material) {
-  const length = Math.hypot(endX - startX, endZ - startZ);
-  const trace = new THREE.Mesh(new THREE.BoxGeometry(length, 0.018, 0.03), material);
-  trace.position.set((startX + endX) / 2, 0.32, (startZ + endZ) / 2);
-  trace.rotation.y = -Math.atan2(endZ - startZ, endX - startX);
-  scene.add(trace);
-}
-
-function getOuterMarkerPosition(space: ReturnType<typeof getBoardSpace>): [number, number, number] {
-  if (space.side === "top") {
-    return [space.x, 0.34, space.z + 0.46];
-  }
-
-  if (space.side === "bottom") {
-    return [space.x, 0.34, space.z - 0.46];
-  }
-
-  if (space.side === "left") {
-    return [space.x - 0.44, 0.34, space.z];
-  }
-
-  return [space.x + 0.44, 0.34, space.z];
-}
-
-function getSpaceColor(tone: CyberBoardSpace["tone"], isCorner: boolean) {
-  if (tone === "inject") {
-    return 0x9a3412;
-  }
-
-  if (isCorner || tone === "start") {
-    return 0x0f766e;
-  }
-
-  const colors: Record<CyberBoardSpace["tone"], number> = {
-    start: 0x0f766e,
-    triage: 0x2563eb,
-    decision: 0x6d28d9,
-    technical: 0x1e3a8a,
-    business: 0x475569,
-    recovery: 0x15803d,
-    gap: 0x92400e,
-    inject: 0x9a3412,
-  };
-
-  return colors[tone];
-}
-
-function getSpaceAccentColor(tone: CyberBoardSpace["tone"]) {
-  const colors: Record<CyberBoardSpace["tone"], number> = {
-    start: 0x5eead4,
-    triage: 0x93c5fd,
-    decision: 0xc4b5fd,
-    technical: 0x60a5fa,
-    business: 0xcbd5e1,
-    recovery: 0x86efac,
-    gap: 0xfbbf24,
-    inject: 0xfb923c,
-  };
-
-  return colors[tone];
-}
-
-function getSpaceTextColor(tone: CyberBoardSpace["tone"], isCorner: boolean) {
-  if (tone === "inject" || tone === "gap") {
-    return "#fff2b8";
-  }
-
-  if (isCorner || tone === "start") {
-    return "#ffffff";
-  }
-
-  return "#d8fff1";
-}
-
-function animateTileMaterials(tileMeshes: THREE.Mesh[], positionIndex: number, elapsed: number) {
-  tileMeshes.forEach((tile, index) => {
-    const material = tile.material instanceof THREE.MeshStandardMaterial ? tile.material : null;
-    if (!material) {
-      return;
+function updateEffects(state: SceneState, delta: number) {
+  state.effects = state.effects.filter((effect) => {
+    effect.age += delta;
+    const t = Math.min(1, effect.age / effect.life);
+    if (effect.kind === "ring") {
+      effect.object.scale.setScalar(1 + easeOutCubic(t) * 2.4);
+      (effect.object.material as THREE.MeshBasicMaterial).opacity = 0.9 * (1 - t);
+    } else if (effect.kind === "sparks") {
+      const attribute = effect.object.geometry.getAttribute("position") as THREE.BufferAttribute;
+      const array = attribute.array as Float32Array;
+      for (let index = 0; index < array.length; index += 3) {
+        effect.velocities[index + 1] -= 8 * delta;
+        array[index] += effect.velocities[index] * delta;
+        array[index + 1] = Math.max(SPACE_Y + 0.05, array[index + 1] + effect.velocities[index + 1] * delta);
+        array[index + 2] += effect.velocities[index + 2] * delta;
+      }
+      attribute.needsUpdate = true;
+      (effect.object.material as THREE.PointsMaterial).opacity = 1 - t;
+    } else if (effect.kind === "squash") {
+      const k = easeOutBack(t);
+      const sx = THREE.MathUtils.lerp(1.18, 1, k);
+      effect.object.scale.set(sx, THREE.MathUtils.lerp(0.8, 1, k), sx);
+    } else {
+      effect.object.position.y = SPACE_Y - 0.07 - Math.sin(Math.PI * t) * 0.06;
     }
 
-    const isActive = index === positionIndex % tileMeshes.length;
-    material.emissiveIntensity = isActive ? 0.42 + Math.sin(elapsed * 6) * 0.12 : 0.08;
-    tile.position.y = isActive ? 0.22 + Math.sin(elapsed * 5.4) * 0.018 : 0.205;
+    if (t >= 1) {
+      if (effect.kind === "ring" || effect.kind === "sparks") {
+        state.scene.remove(effect.object);
+        disposeObject(effect.object);
+      } else if (effect.kind === "squash") {
+        effect.object.scale.set(1, 1, 1);
+      } else {
+        effect.object.position.y = SPACE_Y - 0.07;
+      }
+      return false;
+    }
+    return true;
   });
 }
 
-function animateRevealCard(group: THREE.Group, startTime: number, now: number) {
-  if (!startTime) {
-    return;
-  }
+/* ------------------------------------------------------------------ */
+/* Textures                                                            */
+/* ------------------------------------------------------------------ */
 
-  const age = (now - startTime) / 1000;
-  if (age > 1.4) {
-    group.visible = false;
-    return;
-  }
-
-  const lift = Math.sin(Math.min(1, age / 1.4) * Math.PI);
-  group.visible = true;
-  group.position.set(0, 0.46 + lift * 0.88, -0.1);
-  group.rotation.set(-0.1 + lift * 0.24, -0.5 + age * 2.2, 0.05 * Math.sin(age * 12));
-  group.scale.setScalar(0.86 + lift * 0.16);
-}
-
-function createLabelMesh(
-  text: string,
-  color: string,
-  options?: {
-    width?: number;
-    height?: number;
-    fontSize?: number;
-    planeWidth?: number;
-    planeHeight?: number;
-    fill?: string;
-    stroke?: string;
-  },
-) {
+function createSkyTexture() {
   const canvas = document.createElement("canvas");
-  canvas.width = options?.width ?? 192;
-  canvas.height = options?.height ?? 72;
-  const context = canvas.getContext("2d");
-  if (context) {
-    context.fillStyle = options?.fill ?? "rgba(6, 12, 20, 0.78)";
-    context.fillRect(0, 0, canvas.width, canvas.height);
-    context.strokeStyle = options?.stroke ?? "rgba(35, 211, 155, 0.52)";
-    context.lineWidth = 4;
-    context.strokeRect(7, 7, canvas.width - 14, canvas.height - 14);
-    context.fillStyle = color;
-    context.font = `bold ${options?.fontSize ?? 22}px Arial`;
-    context.textAlign = "center";
-    context.textBaseline = "middle";
-    drawWrappedText(context, text, canvas.width / 2, canvas.height / 2, canvas.width - 28, options?.fontSize ?? 22);
+  canvas.width = 16;
+  canvas.height = 512;
+  const ctx = canvas.getContext("2d");
+  if (ctx) {
+    const gradient = ctx.createLinearGradient(0, 0, 0, 512);
+    gradient.addColorStop(0, "#7cc8ff");
+    gradient.addColorStop(0.55, "#bfe3ff");
+    gradient.addColorStop(1, "#ead9ff");
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, 16, 512);
   }
-
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
-  const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
-  return new THREE.Mesh(
-    new THREE.PlaneGeometry(options?.planeWidth ?? (options?.width ? 1.18 : 0.92), options?.planeHeight ?? (options?.height ? 0.36 : 0.34)),
-    material,
-  );
+  return texture;
 }
 
-function drawWrappedText(context: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number, fontSize: number) {
-  const words = String(text).split(/\s+/).filter(Boolean);
-  const lines: string[] = [];
-  let line = "";
-
-  words.forEach((word) => {
-    const candidate = line ? `${line} ${word}` : word;
-    if (context.measureText(candidate).width > maxWidth && line) {
-      lines.push(line);
-      line = word;
-      return;
+function createPlazaTexture() {
+  const width = 2048;
+  const height = Math.round(width * (16 / 23));
+  const unit = width / 23;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (ctx) {
+    // Lawn border with flowers.
+    ctx.fillStyle = "#c9efd2";
+    ctx.fillRect(0, 0, width, height);
+    for (let index = 0; index < 320; index += 1) {
+      ctx.fillStyle = ["#ffffff", "#ff9ec7", "#ffd86b"][index % 3];
+      ctx.beginPath();
+      ctx.arc(Math.random() * width, Math.random() * height, 5, 0, Math.PI * 2);
+      ctx.fill();
     }
-    line = candidate;
-  });
-
-  if (line) {
-    lines.push(line);
+    // Checkered plaza.
+    ctx.save();
+    roundRect(ctx, 70, 70, width - 140, height - 140, 120);
+    ctx.clip();
+    ctx.fillStyle = "#f9dbe8";
+    ctx.fillRect(0, 0, width, height);
+    const tile = 64;
+    ctx.fillStyle = "#f3cadd";
+    for (let y = 0; y < height; y += tile) {
+      for (let x = 0; x < width; x += tile) {
+        if ((x / tile + y / tile) % 2 === 0) {
+          ctx.fillRect(x, y, tile, tile);
+        }
+      }
+    }
+    ctx.restore();
+    // Central fountain plaza.
+    ctx.fillStyle = "#fff4d6";
+    ctx.beginPath();
+    ctx.arc(width / 2, height / 2 - 0.9 * unit, 3.3 * unit, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "#ffc857";
+    ctx.lineWidth = 10;
+    ctx.stroke();
   }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 8;
+  return texture;
+}
 
-  const displayLines = lines.slice(0, 3);
-  if (lines.length > 3) {
-    displayLines[2] = `${displayLines[2].replace(/[,.!?;:]+$/, "")}.`;
+function createSpaceTexture(tone: BoardSpaceTone, isStart: boolean) {
+  const size = 256;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  if (ctx) {
+    const color = isStart ? "#ffb21e" : toneMeta[tone].color;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, size, size);
+    const gradient = ctx.createRadialGradient(size * 0.4, size * 0.35, 10, size / 2, size / 2, size * 0.45);
+    gradient.addColorStop(0, shade(color, 0.16));
+    gradient.addColorStop(1, shade(color, -0.06));
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.arc(size / 2, size / 2, size * 0.42, 0, Math.PI * 2);
+    ctx.fill();
+    if (isStart) {
+      ctx.fillStyle = "#ffffff";
+      ctx.font = `900 58px ${FONT}`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("START", size / 2, size / 2 + 4);
+    } else {
+      drawGlyph(ctx, tone, size / 2, size / 2, size * 0.42, "#ffffff");
+    }
   }
-  const lineHeight = fontSize * 1.15;
-  const startY = y - ((displayLines.length - 1) * lineHeight) / 2;
-  displayLines.forEach((currentLine, index) => {
-    context.fillText(currentLine, x, startY + index * lineHeight);
-  });
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function drawGlyph(ctx: CanvasRenderingContext2D, tone: BoardSpaceTone, x: number, y: number, size: number, color: string) {
+  ctx.save();
+  ctx.translate(x, y);
+  const s = size / 2;
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = Math.max(5, size * 0.1);
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  switch (tone) {
+    case "start":
+    case "business": {
+      // A person: stakeholders.
+      ctx.beginPath();
+      ctx.arc(0, -s * 0.3, s * 0.26, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(0, s * 0.55, s * 0.5, Math.PI, 0);
+      ctx.fill();
+      break;
+    }
+    case "triage": {
+      ctx.beginPath();
+      ctx.moveTo(0, -s * 0.7);
+      ctx.lineTo(s * 0.72, s * 0.55);
+      ctx.lineTo(-s * 0.72, s * 0.55);
+      ctx.closePath();
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(0, -s * 0.2);
+      ctx.lineTo(0, s * 0.12);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(0, s * 0.35, ctx.lineWidth * 0.55, 0, Math.PI * 2);
+      ctx.fill();
+      break;
+    }
+    case "decision": {
+      ctx.beginPath();
+      ctx.moveTo(0, -s * 0.72);
+      ctx.lineTo(s * 0.72, 0);
+      ctx.lineTo(0, s * 0.72);
+      ctx.lineTo(-s * 0.72, 0);
+      ctx.closePath();
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(-s * 0.3, 0);
+      ctx.lineTo(-s * 0.05, s * 0.25);
+      ctx.lineTo(s * 0.32, -s * 0.2);
+      ctx.stroke();
+      break;
+    }
+    case "technical": {
+      roundRect(ctx, -s * 0.45, -s * 0.45, s * 0.9, s * 0.9, s * 0.12);
+      ctx.stroke();
+      for (let pin = -1; pin <= 1; pin += 1) {
+        const p = pin * s * 0.25;
+        ctx.beginPath();
+        ctx.moveTo(p, -s * 0.45);
+        ctx.lineTo(p, -s * 0.72);
+        ctx.moveTo(p, s * 0.45);
+        ctx.lineTo(p, s * 0.72);
+        ctx.moveTo(-s * 0.45, p);
+        ctx.lineTo(-s * 0.72, p);
+        ctx.moveTo(s * 0.45, p);
+        ctx.lineTo(s * 0.72, p);
+        ctx.stroke();
+      }
+      break;
+    }
+    case "recovery": {
+      ctx.lineWidth = size * 0.16;
+      ctx.beginPath();
+      ctx.moveTo(0, -s * 0.6);
+      ctx.lineTo(0, s * 0.6);
+      ctx.moveTo(-s * 0.6, 0);
+      ctx.lineTo(s * 0.6, 0);
+      ctx.stroke();
+      break;
+    }
+    case "gap": {
+      ctx.lineWidth = size * 0.16;
+      ctx.beginPath();
+      ctx.moveTo(-s * 0.6, 0);
+      ctx.lineTo(s * 0.6, 0);
+      ctx.stroke();
+      break;
+    }
+    case "inject": {
+      ctx.beginPath();
+      ctx.moveTo(s * 0.12, -s * 0.78);
+      ctx.lineTo(-s * 0.45, s * 0.1);
+      ctx.lineTo(-s * 0.02, s * 0.1);
+      ctx.lineTo(-s * 0.15, s * 0.78);
+      ctx.lineTo(s * 0.45, -s * 0.12);
+      ctx.lineTo(s * 0.02, -s * 0.12);
+      ctx.closePath();
+      ctx.fill();
+      break;
+    }
+  }
+  ctx.restore();
+}
+
+function createBannerMesh(title: string, subtitle: string) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 1024;
+  canvas.height = 256;
+  const ctx = canvas.getContext("2d");
+  if (ctx) {
+    ctx.fillStyle = "#ffffff";
+    roundRect(ctx, 8, 8, 1008, 240, 120);
+    ctx.fill();
+    ctx.lineWidth = 10;
+    ctx.strokeStyle = "#ff6fa8";
+    ctx.stroke();
+    ctx.fillStyle = "#3a2a7a";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = `900 60px ${FONT}`;
+    let label = title.toUpperCase();
+    while (ctx.measureText(label).width > 920 && label.length > 6) {
+      label = `${label.slice(0, -2)}…`;
+    }
+    ctx.fillText(label, 512, 104);
+    ctx.fillStyle = "#8a6fd6";
+    ctx.font = `700 32px ${FONT}`;
+    setLetterSpacing(ctx, "2px");
+    ctx.fillText(subtitle.toUpperCase(), 512, 178);
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(4.2, 1.05), new THREE.MeshBasicMaterial({ map: texture, transparent: true }));
+  mesh.rotation.x = -Math.PI / 2;
+  return mesh;
+}
+
+function createWindowTexture() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 128;
+  const ctx = canvas.getContext("2d");
+  if (ctx) {
+    for (let row = 0; row < 2; row += 1) {
+      for (let col = 0; col < 4; col += 1) {
+        ctx.fillStyle = (row + col) % 3 === 0 ? "rgba(255,246,190,0.95)" : "rgba(120,170,230,0.85)";
+        roundRect(ctx, 12 + col * 60, 12 + row * 58, 48, 46, 10);
+        ctx.fill();
+      }
+    }
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function createRadialTexture(inner: string, outer: string, size = 256) {
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  if (ctx) {
+    const gradient = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+    gradient.addColorStop(0, inner);
+    gradient.addColorStop(1, outer);
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, size, size);
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function createPipTexture(value: number) {
+  const size = 256;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  if (ctx) {
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, size, size);
+    const spots: Record<number, Array<[number, number]>> = {
+      1: [[0.5, 0.5]],
+      2: [[0.27, 0.27], [0.73, 0.73]],
+      3: [[0.27, 0.27], [0.5, 0.5], [0.73, 0.73]],
+      4: [[0.27, 0.27], [0.73, 0.27], [0.27, 0.73], [0.73, 0.73]],
+      5: [[0.27, 0.27], [0.73, 0.27], [0.5, 0.5], [0.27, 0.73], [0.73, 0.73]],
+      6: [[0.27, 0.25], [0.73, 0.25], [0.27, 0.5], [0.73, 0.5], [0.27, 0.75], [0.73, 0.75]],
+    };
+    spots[value].forEach(([x, y]) => {
+      ctx.fillStyle = value === 1 ? "#ff3d6e" : "#2f60e0";
+      ctx.beginPath();
+      ctx.arc(x * size, y * size, value === 1 ? 36 : 25, 0, Math.PI * 2);
+      ctx.fill();
+    });
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function createD20Atlas(values: number[]) {
+  const cell = 256;
+  const canvas = document.createElement("canvas");
+  canvas.width = cell * 5;
+  canvas.height = cell * 4;
+  const ctx = canvas.getContext("2d");
+  if (ctx) {
+    ctx.fillStyle = "#ffb627";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    values.forEach((value, index) => {
+      const x0 = (index % 5) * cell;
+      const y0 = Math.floor(index / 5) * cell;
+      const apex = [x0 + cell / 2, y0 + cell * 0.08];
+      const left = [x0 + cell * 0.06, y0 + cell * 0.9];
+      const right = [x0 + cell * 0.94, y0 + cell * 0.9];
+      ctx.fillStyle = value >= 15 ? "#ff8a3d" : "#ffc94a";
+      ctx.beginPath();
+      ctx.moveTo(apex[0], apex[1]);
+      ctx.lineTo(left[0], left[1]);
+      ctx.lineTo(right[0], right[1]);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255,255,255,0.7)";
+      ctx.lineWidth = 6;
+      ctx.stroke();
+      const cx = (apex[0] + left[0] + right[0]) / 3;
+      const cy = (apex[1] + left[1] + right[1]) / 3 + 6;
+      ctx.fillStyle = "#5a2a00";
+      ctx.font = `900 ${value >= 10 ? 74 : 86}px ${FONT}`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(String(value), cx, cy);
+      if (value === 6 || value === 9) {
+        ctx.fillRect(cx - 20, cy + 42, 40, 7);
+      }
+    });
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+/* ------------------------------------------------------------------ */
+/* Utilities                                                           */
+/* ------------------------------------------------------------------ */
+
+interface CameraTween {
+  start: number;
+  duration: number;
+  fromPosition: THREE.Vector3;
+  toPosition: THREE.Vector3;
+  fromTarget: THREE.Vector3;
+  toTarget: THREE.Vector3;
+}
+
+function facingBetween(from: { x: number; z: number }, to: { x: number; z: number }) {
+  return Math.atan2(to.x - from.x, to.z - from.z);
+}
+
+function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number) {
+  const r = Math.min(radius, width / 2, height / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + width, y, x + width, y + height, r);
+  ctx.arcTo(x + width, y + height, x, y + height, r);
+  ctx.arcTo(x, y + height, x, y, r);
+  ctx.arcTo(x, y, x + width, y, r);
+  ctx.closePath();
+}
+
+function setLetterSpacing(ctx: CanvasRenderingContext2D, value: string) {
+  const spaced = ctx as CanvasRenderingContext2D & { letterSpacing?: string };
+  if ("letterSpacing" in spaced) {
+    spaced.letterSpacing = value;
+  }
+}
+
+function shade(hex: string, amount: number) {
+  const color = new THREE.Color(hex);
+  const hsl = { h: 0, s: 0, l: 0 };
+  color.getHSL(hsl);
+  color.setHSL(hsl.h, hsl.s, Math.max(0, Math.min(1, hsl.l + amount)));
+  return `#${color.getHexString()}`;
+}
+
+function lerpAngle(from: number, to: number, t: number) {
+  let difference = to - from;
+  while (difference > Math.PI) difference -= Math.PI * 2;
+  while (difference < -Math.PI) difference += Math.PI * 2;
+  return from + difference * t;
 }
 
 function easeOutCubic(value: number) {
   return 1 - Math.pow(1 - value, 3);
 }
 
-function cannonToThree(value: CANNON.Vec3) {
-  return new THREE.Vector3(value.x, value.y, value.z);
+function easeInCubic(value: number) {
+  return value * value * value;
 }
 
-function cannonQuatToThree(value: CANNON.Quaternion) {
-  return new THREE.Quaternion(value.x, value.y, value.z, value.w);
+function easeInOutCubic(value: number) {
+  return value < 0.5 ? 4 * value * value * value : 1 - Math.pow(-2 * value + 2, 3) / 2;
 }
 
-function disposeMaterial(material: THREE.Material) {
-  const mapped = material as THREE.Material & { map?: THREE.Texture | null };
-  mapped.map?.dispose();
-  material.dispose();
+function easeInOutSine(value: number) {
+  return -(Math.cos(Math.PI * value) - 1) / 2;
+}
+
+function easeOutBack(value: number) {
+  const c1 = 1.70158;
+  const c3 = c1 + 1;
+  return 1 + c3 * Math.pow(value - 1, 3) + c1 * Math.pow(value - 1, 2);
+}
+
+function disposeObject(object: THREE.Object3D) {
+  object.traverse((child) => {
+    if (child instanceof THREE.Mesh || child instanceof THREE.Points || child instanceof THREE.Sprite || child instanceof THREE.LineSegments) {
+      // Sprites share one module-level geometry in three.js, so never dispose it.
+      if (!(child instanceof THREE.Sprite)) {
+        child.geometry?.dispose();
+      }
+      const materials = Array.isArray(child.material) ? child.material : [child.material];
+      materials.forEach((material: THREE.Material) => {
+        (material as THREE.Material & { map?: THREE.Texture | null }).map?.dispose();
+        material.dispose();
+      });
+    }
+  });
 }

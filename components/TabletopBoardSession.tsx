@@ -1,35 +1,63 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import dynamic from "next/dynamic";
 import {
+  Award,
+  BookOpen,
   Bot,
   CheckCircle2,
+  ClipboardCheck,
   Clipboard,
+  Crosshair,
   Dices,
   Download,
+  Flag,
   Gamepad2,
+  Keyboard,
   Lightbulb,
   ListTodo,
   Loader2,
   Lock,
+  Map as MapIcon,
+  Maximize2,
   MessageSquare,
   NotebookPen,
-  Play,
   RefreshCw,
+  Scale,
   Sparkles,
   Trophy,
+  Volume2,
+  VolumeX,
+  Zap,
+  type LucideIcon,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { buildCyberBoardSpaces, pawnOptions, type PawnKey } from "@/components/tabletop-board-config";
+import type { CameraMode, DeckDraw, PawnMove } from "@/components/TabletopBoardScene";
+import {
+  DICE_ROLL_MS,
+  HOP_MS,
+  LAND_SETTLE_MS,
+  LAP_BONUS_POINTS,
+  buildBoardGraph,
+  buildCyberBoardSpaces,
+  pawnOptions,
+  spaceEffects,
+  toneMeta,
+  type DiceRoll,
+  type PawnKey,
+  type PawnOption,
+} from "@/components/tabletop-board-config";
 import {
   isAccountApiConfigured,
   requestTabletopAiAssistance,
   requestTabletopAiInject,
   type TabletopAiAssistResponse,
 } from "@/lib/account";
+import { gameSounds, isSoundMuted, setSoundMuted } from "@/lib/game-audio";
 import { downloadTextFile, safeFilename } from "@/lib/report-export";
 import type { GeneratedExercise } from "@/lib/types";
 
@@ -85,11 +113,31 @@ interface GameScorecard {
   nextTabletop: string;
 }
 
+interface PointPop {
+  id: number;
+  amount: number;
+  label: string;
+}
+
+const POINTS = {
+  written: 100,
+  aloud: 40,
+  twist: 75,
+} as const;
+
+const cardKindMeta: Record<CardKind, { label: string; color: string; icon: LucideIcon }> = {
+  brief: { label: "Briefing", color: "#14b88a", icon: BookOpen },
+  question: { label: "Discussion", color: "#3b82f6", icon: MessageSquare },
+  decision: { label: "Decision", color: "#8b5cf6", icon: Scale },
+  gap: { label: "IRP Check", color: "#f59e0b", icon: ClipboardCheck },
+  inject: { label: "Twist", color: "#f97316", icon: Zap },
+};
+
 const LazyTabletopBoardScene = dynamic(
   () => import("@/components/TabletopBoardScene").then((module) => module.TabletopBoardScene),
   {
     ssr: false,
-    loading: () => <TableScenePlaceholder label="Loading 3D table..." />,
+    loading: () => <TableScenePlaceholder label="Setting up the table..." />,
   },
 );
 
@@ -103,18 +151,22 @@ export function TabletopBoardSession({
   const deck = useMemo(() => buildBoardDeck(exercise), [exercise]);
   const injectDeck = useMemo(() => buildInjectDeck(exercise), [exercise]);
   const boardSpaces = useMemo(() => buildCyberBoardSpaces(exercise), [exercise]);
+  const nodes = useMemo(() => buildBoardGraph(boardSpaces), [boardSpaces]);
   const [selectedPawn, setSelectedPawn] = useState<PawnKey>("sentinel");
   const [hasStarted, setHasStarted] = useState(false);
-  const [positionIndex, setPositionIndex] = useState(0);
+  const [nodeId, setNodeId] = useState(0);
+  const [move, setMove] = useState<PawnMove | null>(null);
+  const [junction, setJunction] = useState<{ options: number[]; remaining: number; passedStart: boolean; d20: number } | null>(null);
   const [deckIndex, setDeckIndex] = useState(0);
   const [activeCard, setActiveCard] = useState<BoardCard>(() => deck[0]);
   const [resolvedCards, setResolvedCards] = useState<Record<string, boolean>>({});
   const [rollResult, setRollResult] = useState(0);
-  const [rollNonce, setRollNonce] = useState(0);
+  const [dice, setDice] = useState<DiceRoll | null>(null);
   const [isRolling, setIsRolling] = useState(false);
+  const [isMoving, setIsMoving] = useState(false);
   const [isGeneratingInject, setIsGeneratingInject] = useState(false);
   const [notes, setNotes] = useState("");
-  const [isNotesOpen, setIsNotesOpen] = useState(true);
+  const [isNotesOpen, setIsNotesOpen] = useState(false);
   const [hasEnteredTable, setHasEnteredTable] = useState(false);
   const [teamResponse, setTeamResponse] = useState("");
   const [decisionPath, setDecisionPath] = useState<DecisionPathEntry[]>([]);
@@ -130,98 +182,256 @@ export function TabletopBoardSession({
   const [isAssistantOpen, setIsAssistantOpen] = useState(false);
   const [isAssistantThinking, setIsAssistantThinking] = useState(false);
   const [scorecard, setScorecard] = useState<GameScorecard | null>(null);
+  const [showVictory, setShowVictory] = useState(false);
+  const [points, setPoints] = useState(0);
+  const [laps, setLaps] = useState(0);
+  const [pointPops, setPointPops] = useState<PointPop[]>([]);
+  const [landedIndex, setLandedIndex] = useState<number | null>(null);
+  const [revealCard, setRevealCard] = useState<BoardCard | null>(null);
+  const [deckDraw, setDeckDraw] = useState<DeckDraw | null>(null);
+  const [resetNonce, setResetNonce] = useState(0);
+  const [cameraMode, setCameraMode] = useState<CameraMode>("follow");
+  const [muted, setMuted] = useState(false);
+  const timersRef = useRef<number[]>([]);
+  const nonceRef = useRef(0);
+  const mountedRef = useRef(true);
+  const answerRef = useRef<HTMLTextAreaElement | null>(null);
 
   const selectedPawnOption = pawnOptions.find((pawn) => pawn.key === selectedPawn) ?? pawnOptions[0];
   const injectThreshold = getInjectThreshold(exercise.overview.maturityLevel);
   const currentCardNumber = Math.min(deckIndex + 1, deck.length);
   const resolvedCount = deck.filter((card) => card.kind === "brief" || resolvedCards[card.id]).length;
-  const deckProgressPercent = Math.round((resolvedCount / Math.max(1, deck.length)) * 100);
   const activeInject = revealedInjects.at(-1);
   const isCurrentCardResolved = activeCard.kind === "brief" || resolvedCards[activeCard.id] === true;
   const isFinalCard = deckIndex >= deck.length - 1;
   const canUseAi = isAccountApiConfigured();
+  const isBusy = isRolling || isMoving || isGeneratingInject || junction !== null;
+  const canRoll = !isBusy && !isInjectOverlayOpen && !revealCard && !scorecard && isCurrentCardResolved;
+  const landedSpace = landedIndex !== null ? nodes[landedIndex] : null;
 
-  const roll = useCallback(() => {
-    if (isRolling || isGeneratingInject || isInjectOverlayOpen || deck.length === 0 || scorecard) {
-      return;
-    }
+  useEffect(() => {
+    mountedRef.current = true;
+    setMuted(isSoundMuted());
+    const timers = timersRef.current;
+    return () => {
+      mountedRef.current = false;
+      timers.forEach((id) => window.clearTimeout(id));
+    };
+  }, []);
 
-    if (!isCurrentCardResolved) {
-      setActionNotice("Capture the team answer or mark this card discussed before rolling again.");
-      return;
-    }
+  const schedule = useCallback((callback: () => void, delay: number) => {
+    const id = window.setTimeout(() => {
+      timersRef.current = timersRef.current.filter((item) => item !== id);
+      if (mountedRef.current) {
+        callback();
+      }
+    }, delay);
+    timersRef.current.push(id);
+  }, []);
 
-    if (isFinalCard) {
-      const nextScorecard = buildGameScorecard(exercise, deck, decisionPath, revealedInjects, notes);
-      setScorecard(nextScorecard);
-      setActionNotice("Exercise complete. Scorecard is ready.");
-      return;
-    }
+  const awardPoints = useCallback(
+    (amount: number, label: string, withSound = true) => {
+      nonceRef.current += 1;
+      const id = nonceRef.current;
+      setPoints((current) => Math.max(0, current + amount));
+      setPointPops((current) => [...current, { id, amount, label }]);
+      if (withSound) {
+        if (amount < 0) {
+          gameSounds.lose();
+        } else {
+          gameSounds.points();
+        }
+      }
+      schedule(() => setPointPops((current) => current.filter((pop) => pop.id !== id)), 1900);
+    },
+    [schedule],
+  );
 
-    const nextRoll = Math.floor(Math.random() * 20) + 1;
-    const nextPosition = (positionIndex + 1) % boardSpaces.length;
-    const shouldInject = hasStarted && nextRoll >= injectThreshold && injectDeck.length > 0;
-    const nextDeckIndex = deckIndex + 1;
-    const nextCard = deck[nextDeckIndex];
+  // Latest values for timer callbacks that resolve after the pawn finishes moving.
+  const latestRef = useRef({ activeCard, decisionPath, revealedInjects, notes, deckIndex, hasStarted });
+  useEffect(() => {
+    latestRef.current = { activeCard, decisionPath, revealedInjects, notes, deckIndex, hasStarted };
+  });
 
-    setIsRolling(true);
-    setRollResult(nextRoll);
-    setRollNonce((current) => current + 1);
-    setPositionIndex(nextPosition);
-    setActionNotice(shouldInject ? "High roll. Drawing a scenario consequence..." : "");
-
-    window.setTimeout(() => {
+  const resolveLanding = useCallback(
+    (landedId: number, passedStart: boolean, d20: number) => {
       void (async () => {
+        const latest = latestRef.current;
+        setIsMoving(false);
+        setLandedIndex(landedId);
+        if (passedStart) {
+          setLaps((current) => current + 1);
+          awardPoints(LAP_BONUS_POINTS, "Lap bonus", false);
+          gameSounds.lap();
+        }
+        const node = nodes[landedId];
+        const effect = spaceEffects[node.tone];
+        if (effect.points !== 0) {
+          awardPoints(effect.points, effect.label, !passedStart);
+        }
+
+        const landedOnTwist = node.tone === "inject";
+        const shouldInject = latest.hasStarted && injectDeck.length > 0 && (d20 >= injectThreshold || landedOnTwist);
+        const nextDeckIndex = latest.deckIndex + 1;
+        const nextCard = deck[nextDeckIndex];
+
         if (shouldInject) {
           setIsGeneratingInject(true);
+          setActionNotice(landedOnTwist ? "Twist space! Drawing a scenario consequence..." : `Pressure roll of ${d20}! Drawing a scenario consequence...`);
           const inject = await resolveInjectCard({
             exercise,
-            fallbackInject: injectDeck[(revealedInjects.length + nextRoll) % injectDeck.length],
-            decisionPath,
-            revealedInjects,
-            notes,
-            roll: nextRoll,
-            activeCard,
+            fallbackInject: injectDeck[(latest.revealedInjects.length + d20) % injectDeck.length],
+            decisionPath: latest.decisionPath,
+            revealedInjects: latest.revealedInjects,
+            notes: latest.notes,
+            roll: d20,
+            activeCard: latest.activeCard,
             canUseAi,
           });
+          if (!mountedRef.current) {
+            return;
+          }
+          nonceRef.current += 1;
+          setDeckDraw({ nonce: nonceRef.current, deck: "inject" });
           setRevealedInjects((current) => [...current, inject]);
           setOverlayInject(inject);
           setPendingCard(nextCard);
           setDeckIndex(nextDeckIndex);
           setIsInjectOverlayOpen(true);
           setIsGeneratingInject(false);
+          setActionNotice("");
+          gameSounds.twist();
         } else {
+          nonceRef.current += 1;
+          setDeckDraw({ nonce: nonceRef.current, deck: "prompt" });
           setDeckIndex(nextDeckIndex);
           setActiveCard(nextCard);
           setTeamResponse("");
           setLearningMoment("");
+          setRevealCard(nextCard);
+          gameSounds.card();
         }
-
         setHasStarted(true);
-        setIsRolling(false);
       })();
-    }, 1000);
+    },
+    [awardPoints, canUseAi, deck, exercise, injectDeck, injectThreshold, nodes],
+  );
+
+  /** Walks the pawn along the board, pausing at forks so the team can choose a route. */
+  const advance = useCallback(
+    (from: number, steps: number, passedStart: boolean, d20: number, forcedFirst?: number) => {
+      const path: number[] = [];
+      let cursor = from;
+      let remaining = steps;
+      if (forcedFirst !== undefined && remaining > 0) {
+        cursor = forcedFirst;
+        path.push(cursor);
+        remaining -= 1;
+      }
+      while (remaining > 0 && nodes[cursor].next.length === 1) {
+        cursor = nodes[cursor].next[0];
+        path.push(cursor);
+        remaining -= 1;
+      }
+      const passed = passedStart || path.includes(0);
+
+      if (path.length > 0) {
+        nonceRef.current += 1;
+        setMove({ nonce: nonceRef.current, path, stepsAfter: remaining });
+        setIsMoving(true);
+      }
+
+      schedule(
+        () => {
+          setNodeId(cursor);
+          if (remaining > 0) {
+            setIsMoving(false);
+            setJunction({ options: nodes[cursor].next, remaining, passedStart: passed, d20 });
+            gameSounds.click();
+          } else {
+            resolveLanding(cursor, passed, d20);
+          }
+        },
+        path.length * HOP_MS + (remaining > 0 ? 80 : LAND_SETTLE_MS),
+      );
+    },
+    [nodes, resolveLanding, schedule],
+  );
+
+  const roll = useCallback(() => {
+    if (isBusy || isInjectOverlayOpen || revealCard || deck.length === 0 || scorecard) {
+      return;
+    }
+
+    if (!isCurrentCardResolved) {
+      setActionNotice("Capture the team answer or mark this card discussed before rolling again.");
+      gameSounds.click();
+      answerRef.current?.focus();
+      return;
+    }
+
+    if (isFinalCard) {
+      const nextScorecard = buildGameScorecard(exercise, deck, decisionPath, revealedInjects, notes);
+      setScorecard(nextScorecard);
+      setShowVictory(true);
+      setActionNotice("Exercise complete. Scorecard is ready.");
+      gameSounds.victory();
+      return;
+    }
+
+    const d20 = Math.floor(Math.random() * 20) + 1;
+    const d6 = Math.floor(Math.random() * 6) + 1;
+
+    nonceRef.current += 1;
+    setDice({ nonce: nonceRef.current, d20, d6 });
+    setIsRolling(true);
+    setRollResult(d20);
+    setLandedIndex(null);
+    setActionNotice("");
+    gameSounds.shake();
+
+    schedule(() => {
+      setIsRolling(false);
+      advance(nodeId, d6, false, d20);
+    }, DICE_ROLL_MS);
   }, [
-    activeCard,
-    boardSpaces.length,
-    canUseAi,
+    advance,
     deck,
-    deckIndex,
     decisionPath,
     exercise,
-    hasStarted,
-    injectDeck,
-    injectThreshold,
+    isBusy,
     isCurrentCardResolved,
     isFinalCard,
-    isGeneratingInject,
     isInjectOverlayOpen,
-    isRolling,
+    nodeId,
     notes,
-    positionIndex,
+    revealCard,
     revealedInjects,
+    schedule,
     scorecard,
   ]);
+
+  function pickJunction(choice: number) {
+    if (!junction || !junction.options.includes(choice)) {
+      return;
+    }
+    const pending = junction;
+    setJunction(null);
+    gameSounds.click();
+    advance(nodeId, pending.remaining, pending.passedStart, pending.d20, choice);
+  }
+
+  const dismissReveal = useCallback(() => {
+    if (!revealCard) {
+      return;
+    }
+    const kind = revealCard.kind;
+    setRevealCard(null);
+    gameSounds.click();
+    if (kind !== "brief") {
+      window.setTimeout(() => answerRef.current?.focus({ preventScroll: true }), 60);
+    }
+  }, [revealCard]);
 
   function closeInjectOverlay() {
     if (pendingCard) {
@@ -233,17 +443,52 @@ export function TabletopBoardSession({
     setTeamResponse("");
     setLearningMoment("");
     setActionNotice("");
+    awardPoints(POINTS.twist, "Twist handled");
   }
 
+  const rollRef = useRef(roll);
+  const dismissRef = useRef(dismissReveal);
+  useEffect(() => {
+    rollRef.current = roll;
+    dismissRef.current = dismissReveal;
+  }, [roll, dismissReveal]);
+
+  useEffect(() => {
+    if (!hasEnteredTable) {
+      return;
+    }
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === "TEXTAREA" || target.tagName === "INPUT" || target.isContentEditable)) {
+        return;
+      }
+      if ((event.key === "Enter" || event.key === "Escape") && target?.tagName !== "BUTTON") {
+        dismissRef.current();
+        return;
+      }
+      if ((event.key === " " && target?.tagName !== "BUTTON") || event.key.toLowerCase() === "r") {
+        event.preventDefault();
+        rollRef.current();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [hasEnteredTable]);
+
   function resetBoard() {
+    timersRef.current.forEach((id) => window.clearTimeout(id));
+    timersRef.current = [];
     setHasStarted(false);
-    setPositionIndex(0);
+    setNodeId(0);
+    setMove(null);
+    setJunction(null);
     setDeckIndex(0);
     setActiveCard(deck[0]);
     setResolvedCards({});
     setRollResult(0);
-    setRollNonce(0);
+    setDice(null);
     setIsRolling(false);
+    setIsMoving(false);
     setIsGeneratingInject(false);
     setTeamResponse("");
     setDecisionPath([]);
@@ -257,6 +502,13 @@ export function TabletopBoardSession({
     setAssistantAnswer("");
     setAssistantNotice("");
     setScorecard(null);
+    setShowVictory(false);
+    setPoints(0);
+    setLaps(0);
+    setPointPops([]);
+    setLandedIndex(null);
+    setRevealCard(null);
+    setResetNonce((current) => current + 1);
   }
 
   function captureResponse(skipped = false) {
@@ -289,6 +541,7 @@ export function TabletopBoardSession({
       return current.trim() ? `${current.trim()}\n${nextLine}` : nextLine;
     });
     setTeamResponse("");
+    awardPoints(skipped ? POINTS.aloud : POINTS.written, skipped ? "Discussed aloud" : "Answer captured");
   }
 
   async function askAssistant(questionOverride?: string) {
@@ -335,7 +588,7 @@ export function TabletopBoardSession({
       return;
     }
 
-    await navigator.clipboard.writeText(buildGameScorecardMarkdown(exercise, scorecard, decisionPath, revealedInjects, notes));
+    await navigator.clipboard.writeText(buildGameScorecardMarkdown(exercise, scorecard, decisionPath, revealedInjects, notes, points));
     setActionNotice("Scorecard copied.");
   }
 
@@ -345,196 +598,333 @@ export function TabletopBoardSession({
     }
 
     downloadTextFile(
-      buildGameScorecardHtml(exercise, scorecard, decisionPath, revealedInjects, notes),
+      buildGameScorecardHtml(exercise, scorecard, decisionPath, revealedInjects, notes, points),
       `${safeFilename(exercise.overview.organization)}-tabletop-game-scorecard.html`,
       "text/html;charset=utf-8",
     );
     setActionNotice("Readable scorecard downloaded.");
   }
 
+  function toggleSound() {
+    const next = !muted;
+    setSoundMuted(next);
+    setMuted(next);
+    if (!next) {
+      gameSounds.click();
+    }
+  }
+
+  const rollLabel = isGeneratingInject
+    ? "Drawing..."
+    : isRolling
+      ? "Rolling..."
+      : isMoving
+        ? "Moving..."
+        : scorecard
+          ? "Complete"
+          : isFinalCard && isCurrentCardResolved
+            ? "Finish Game"
+            : hasStarted
+              ? "Roll"
+              : "Roll To Begin";
+
+  const statusLine = scorecard
+    ? "Game complete. Review the scorecard in the side panel."
+    : actionNotice
+      ? actionNotice
+      : junction
+        ? "Choose a route at the fork."
+        : isBusy
+          ? "Watch the board..."
+        : !isCurrentCardResolved
+          ? "Answer the card to unlock your next roll."
+          : `Pressure ${injectThreshold}+ on the d20 triggers a twist.`;
+
   return (
-    <section className="table-mode-shell overflow-hidden rounded-lg border border-primary/20 bg-background/60">
+    <section className="table-mode-shell overflow-hidden rounded-2xl border border-white/10 bg-[#070b10]">
       {isInjectOverlayOpen && overlayInject ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/95 p-4 backdrop-blur-md">
-          <div className="w-full max-w-3xl text-center">
-            <div className="mx-auto mb-6 flex size-28 items-center justify-center rounded-2xl border border-accent/45 bg-accent/15 shadow-2xl shadow-accent/20">
-              <div className="dice-roll-landed text-center">
-                <Dices className="mx-auto size-12 text-accent" suppressHydrationWarning />
-                <p className="mt-2 text-4xl font-bold text-accent">{overlayInject.roll}</p>
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/80 p-4 backdrop-blur-md" role="dialog" aria-modal="true" aria-labelledby="twist-title">
+          <div className="twist-card relative w-full max-w-2xl overflow-hidden rounded-3xl p-[2px]">
+            <div className="relative rounded-[calc(1.5rem-2px)] bg-[#140a05] p-6 text-center sm:p-10">
+              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(249,115,22,0.35),transparent_60%)]" />
+              <div className="relative">
+                <div className="mx-auto mb-5 flex w-fit items-center gap-3">
+                  <span className="d20-chip">{overlayInject.roll}</span>
+                  <span className="rounded-full border border-orange-400/40 bg-orange-500/15 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-orange-200">
+                    Twist card
+                  </span>
+                </div>
+                <p className="text-sm font-semibold uppercase tracking-[0.3em] text-orange-300/80">Oh no...</p>
+                <h2 id="twist-title" className="mt-2 text-3xl font-black text-white sm:text-5xl">
+                  {overlayInject.title}
+                </h2>
+                <p className="mx-auto mt-5 max-w-xl text-lg leading-8 text-orange-50/90">{overlayInject.text}</p>
+                <div className="mx-auto mt-6 grid max-w-xl gap-3 text-left md:grid-cols-2">
+                  <div className="rounded-2xl border border-orange-300/20 bg-black/30 p-4">
+                    <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-orange-300">Ask next</p>
+                    <p className="mt-2 text-sm leading-6 text-orange-50/80">{overlayInject.followUpQuestion}</p>
+                  </div>
+                  <div className="rounded-2xl border border-orange-300/20 bg-black/30 p-4">
+                    <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-orange-300">Decision pressure</p>
+                    <p className="mt-2 text-sm leading-6 text-orange-50/80">{overlayInject.expectedDecision}</p>
+                  </div>
+                </div>
+                <Button size="lg" className="mt-8 rounded-full bg-orange-500 px-8 text-white hover:bg-orange-400" onClick={closeInjectOverlay} autoFocus>
+                  Handle it · +{POINTS.twist} pts
+                </Button>
+                <p className="mt-3 text-xs text-orange-100/50">Next up: card {Math.min(deckIndex + 1, deck.length)} of {deck.length}</p>
               </div>
             </div>
-            <Badge variant="secondary" className="mb-4 border-accent/50 bg-accent/20 text-accent">
-              Scenario Evolution
-            </Badge>
-            <h2 className="text-4xl font-semibold text-foreground sm:text-6xl">OH NO...</h2>
-            <p className="mx-auto mt-6 max-w-2xl text-xl leading-9 text-foreground">{overlayInject.text}</p>
-            <div className="mx-auto mt-6 grid max-w-2xl gap-3 text-left md:grid-cols-2">
-              <div className="rounded-md border border-border bg-background/55 p-3">
-                <p className="text-xs font-semibold uppercase tracking-normal text-accent">Ask Next</p>
-                <p className="mt-2 text-sm leading-6 text-muted-foreground">{overlayInject.followUpQuestion}</p>
-              </div>
-              <div className="rounded-md border border-border bg-background/55 p-3">
-                <p className="text-xs font-semibold uppercase tracking-normal text-accent">Decision Pressure</p>
-                <p className="mt-2 text-sm leading-6 text-muted-foreground">{overlayInject.expectedDecision}</p>
-              </div>
-            </div>
-            <Button size="lg" className="mt-8" onClick={closeInjectOverlay}>
-              Continue To Card {Math.min(deckIndex + 1, deck.length)}
-            </Button>
           </div>
         </div>
       ) : null}
 
-      <div className="grid min-h-[calc(100vh-12rem)] xl:grid-cols-[minmax(0,1fr)_28rem]">
-        <div className="relative min-h-[32rem] bg-[radial-gradient(circle_at_center,rgba(40,199,144,0.16),transparent_38rem)]">
+      <div className="grid xl:h-[calc(100vh-9.5rem)] xl:min-h-[44rem] xl:grid-cols-[minmax(0,1fr)_27rem]">
+        <div className="relative h-[34rem] overflow-hidden sm:h-[40rem] xl:h-auto">
           {hasEnteredTable ? (
             <LazyTabletopBoardScene
               pawn={selectedPawn}
-              boardSpaces={boardSpaces}
-              positionIndex={positionIndex}
-              rollNonce={rollNonce}
-              rollResult={rollResult}
-              isRolling={isRolling}
+              nodes={nodes}
+              move={move}
+              dice={dice}
+              diceReady={canRoll || (isFinalCard && isCurrentCardResolved && !scorecard && !isBusy)}
+              junction={junction?.options ?? null}
+              deckDraw={deckDraw}
+              resetNonce={resetNonce}
+              cameraMode={cameraMode}
               sceneTitle={exercise.overview.scenario}
               sceneSubtitle={`${exercise.overview.industry} | ${exercise.overview.organizationSize} | ${exercise.overview.maturityLevel}`}
-              sceneIndustry={exercise.overview.industry}
-              sceneOrganizationSize={exercise.overview.organizationSize}
+              onDiceClick={roll}
+              onJunctionPick={pickJunction}
+              onHop={gameSounds.hop}
+              onLand={gameSounds.land}
             />
           ) : (
             <TableScenePlaceholder label="Ready when you are." />
           )}
 
           {!hasEnteredTable ? (
-            <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/82 p-4 backdrop-blur-sm">
-              <div className="max-w-2xl rounded-lg border border-primary/35 bg-card/90 p-6 text-center shadow-2xl shadow-black/40">
-                <Badge variant="secondary" className="mb-4">TabletopForge Table Mode</Badge>
-                <h2 className="text-3xl font-semibold text-foreground sm:text-5xl">Pull up a chair.</h2>
-                <p className="mx-auto mt-4 max-w-xl text-base leading-7 text-muted-foreground">
-                  Choose a pawn, roll the die, answer one card at a time, and let the scenario react to the team&apos;s decisions.
-                </p>
-                <div className="mt-6 flex flex-col justify-center gap-3 sm:flex-row">
-                  <Button size="lg" onClick={() => setHasEnteredTable(true)}>
-                    <Gamepad2 className="size-5" suppressHydrationWarning />
-                    Enter The Table
-                  </Button>
-                  <Button size="lg" variant="outline" onClick={onClassicMode}>
-                    <ListTodo className="size-5" suppressHydrationWarning />
-                    Classic Mode
-                  </Button>
+            <CharacterSelect
+              selectedPawn={selectedPawn}
+              onSelect={(key) => {
+                setSelectedPawn(key);
+                gameSounds.click();
+              }}
+              onEnter={() => {
+                setHasEnteredTable(true);
+                gameSounds.lap();
+              }}
+              onClassicMode={onClassicMode}
+              scenario={exercise.overview.scenario}
+              cardCount={deck.length}
+            />
+          ) : (
+            <>
+              {/* Top HUD */}
+              <div className="pointer-events-none absolute inset-x-3 top-3 z-10 flex items-start justify-between gap-3 sm:inset-x-4 sm:top-4">
+                <PlayerHud
+                  pawn={selectedPawnOption}
+                  points={points}
+                  laps={laps}
+                  deckLength={deck.length}
+                  deckIndex={deckIndex}
+                  resolvedCount={resolvedCount}
+                  pops={pointPops}
+                />
+                <div className="pointer-events-auto flex flex-col items-end gap-2">
+                  <div className="hud-glass flex items-center gap-1 rounded-full p-1">
+                    {(
+                      [
+                        { mode: "follow", label: "Follow pawn", icon: Crosshair },
+                        { mode: "overview", label: "Overview", icon: Maximize2 },
+                        { mode: "top", label: "Top-down map", icon: MapIcon },
+                      ] as const
+                    ).map((item) => (
+                      <button
+                        key={item.mode}
+                        type="button"
+                        onClick={() => setCameraMode(item.mode)}
+                        className={`hud-icon-button ${cameraMode === item.mode ? "hud-icon-button-active" : ""}`}
+                        aria-pressed={cameraMode === item.mode}
+                        aria-label={item.label}
+                        title={item.label}
+                      >
+                        <item.icon className="size-4" suppressHydrationWarning />
+                      </button>
+                    ))}
+                    <span className="mx-0.5 h-5 w-px bg-white/10" />
+                    <button type="button" onClick={toggleSound} className="hud-icon-button" aria-label={muted ? "Unmute sound" : "Mute sound"} title={muted ? "Unmute" : "Mute"}>
+                      {muted ? <VolumeX className="size-4" suppressHydrationWarning /> : <Volume2 className="size-4" suppressHydrationWarning />}
+                    </button>
+                    <button type="button" onClick={resetBoard} className="hud-icon-button" aria-label="Restart game" title="Restart game">
+                      <RefreshCw className="size-4" suppressHydrationWarning />
+                    </button>
+                    <button type="button" onClick={onClassicMode} className="hud-icon-button" aria-label="Switch to classic mode" title="Classic mode">
+                      <ListTodo className="size-4" suppressHydrationWarning />
+                    </button>
+                  </div>
+                  <PawnSwitcher selectedPawn={selectedPawn} onSelect={setSelectedPawn} />
                 </div>
               </div>
-            </div>
-          ) : null}
 
-          <div className="pointer-events-none absolute inset-x-4 top-4 flex flex-wrap items-start justify-between gap-3">
-            <div className="pointer-events-auto rounded-md border border-border bg-background/80 p-3 backdrop-blur">
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge variant="secondary">Table Mode</Badge>
-                <Badge variant="outline">{exercise.overview.scenario}</Badge>
-                <Badge variant="outline">{exercise.overview.maturityLevel}</Badge>
-              </div>
-              <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
-                The deck stays in order. Dice add pressure, not chaos.
-              </p>
-            </div>
-            <div className="pointer-events-auto flex flex-wrap gap-2">
-              <Button variant="outline" onClick={onClassicMode}>
-                <ListTodo className="size-4" suppressHydrationWarning />
-                Classic
-              </Button>
-              <Button variant="outline" onClick={resetBoard}>
-                <RefreshCw className="size-4" suppressHydrationWarning />
-                Reset
-              </Button>
-            </div>
-          </div>
+              {/* Landing toast */}
+              {landedSpace && !isBusy && !revealCard ? (
+                <div className="pointer-events-none absolute left-1/2 top-[5.5rem] z-10 w-[min(26rem,calc(100%-1.5rem))] -translate-x-1/2 sm:top-4">
+                  <div
+                    key={`${landedIndex}-${dice?.nonce ?? 0}`}
+                    className="landing-toast hud-glass rounded-2xl px-4 py-3"
+                    style={{ "--tone": toneMeta[landedSpace.tone].color } as CSSProperties}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="size-2 rounded-full" style={{ background: toneMeta[landedSpace.tone].color }} />
+                      <span className="text-[11px] font-bold uppercase tracking-[0.18em]" style={{ color: toneMeta[landedSpace.tone].color }}>
+                        Landed · {toneMeta[landedSpace.tone].label}
+                      </span>
+                    </div>
+                    <p className="mt-1 flex items-center justify-between gap-2 text-sm font-semibold text-white">
+                      <span>{landedSpace.label}</span>
+                      {spaceEffects[landedSpace.tone].points !== 0 ? (
+                        <span className={spaceEffects[landedSpace.tone].points > 0 ? "text-emerald-300" : "text-rose-300"}>
+                          {spaceEffects[landedSpace.tone].points > 0 ? "+" : ""}
+                          {spaceEffects[landedSpace.tone].points} pts
+                        </span>
+                      ) : null}
+                    </p>
+                    <p className="mt-0.5 text-xs leading-5 text-white/65">{toneMeta[landedSpace.tone].hint}</p>
+                  </div>
+                </div>
+              ) : null}
 
-          <div className="pointer-events-none absolute inset-x-4 bottom-4 flex justify-center">
-            <div className="pointer-events-auto flex w-full max-w-3xl flex-col gap-3 rounded-md border border-border bg-background/88 p-4 shadow-2xl shadow-black/35 backdrop-blur md:flex-row md:items-center md:justify-between">
-              <div>
-                <p className="text-sm font-medium text-foreground">Pawn: {selectedPawnOption.name}</p>
-                <p className="mt-1 text-sm text-muted-foreground">{selectedPawnOption.description}</p>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {pawnOptions.map((pawn) => (
+              {junction ? (
+                <div className="pointer-events-none absolute inset-x-3 bottom-28 z-20 flex justify-center">
+                  <div className="junction-panel pointer-events-auto w-full max-w-lg rounded-3xl p-4 text-center">
+                    <p className="text-xs font-black uppercase tracking-[0.25em] text-[#6b4fd6]">Fork in the road</p>
+                    <p className="mt-1 text-sm font-semibold text-[#1c1633]">
+                      {junction.remaining} {junction.remaining === 1 ? "step" : "steps"} left. Which way does the team go?
+                    </p>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      {junction.options.map((option) => {
+                        const isShortcut = nodes[option].route === "shortcut";
+                        return (
+                          <button
+                            key={option}
+                            type="button"
+                            onClick={() => pickJunction(option)}
+                            className={`junction-choice ${isShortcut ? "junction-choice-risky" : "junction-choice-safe"}`}
+                          >
+                            <span className="text-base font-black">{isShortcut ? "Risky shortcut" : "Main road"}</span>
+                            <span className="text-xs font-medium opacity-80">
+                              {isShortcut ? "Faster, but plan gaps and twists" : "Longer, with bonus spaces"}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {/* Bottom dice dock */}
+              <div className="pointer-events-none absolute inset-x-3 bottom-3 z-10 flex justify-center sm:bottom-5">
+                <div className="hud-glass pointer-events-auto flex w-full max-w-xl items-center gap-3 rounded-3xl p-2.5 sm:gap-4 sm:p-3">
+                  <div className="flex shrink-0 items-center gap-2 pl-1">
+                    <DiceFace kind="d20" value={dice?.d20 ?? 0} rolling={isRolling} hot={Boolean(dice && dice.d20 >= injectThreshold)} />
+                    <DiceFace kind="d6" value={dice?.d6 ?? 0} rolling={isRolling} />
+                  </div>
+                  <p className="hidden min-w-0 flex-1 text-xs leading-5 text-white/70 sm:block" aria-live="polite">
+                    {statusLine}
+                  </p>
                   <button
-                    key={pawn.key}
                     type="button"
-                    className={`size-10 rounded-full border-2 transition ${
-                      pawn.key === selectedPawn ? "border-primary shadow-lg shadow-primary/20" : "border-border"
-                    }`}
-                    style={{ background: `linear-gradient(135deg, ${pawn.color}, ${pawn.accent})` }}
-                    onClick={() => setSelectedPawn(pawn.key)}
-                    aria-label={`Choose ${pawn.name} pawn`}
-                    title={pawn.name}
-                  />
-                ))}
+                    onClick={roll}
+                    disabled={isBusy || isInjectOverlayOpen || Boolean(revealCard) || Boolean(scorecard)}
+                    className={`roll-button ml-auto ${canRoll || (isFinalCard && isCurrentCardResolved && !scorecard && !isBusy) ? "roll-button-ready" : ""}`}
+                  >
+                    {isBusy ? <Loader2 className="size-5 animate-spin" suppressHydrationWarning /> : isFinalCard && isCurrentCardResolved && !scorecard ? <Flag className="size-5" suppressHydrationWarning /> : !isCurrentCardResolved && !scorecard ? <Lock className="size-5" suppressHydrationWarning /> : <Dices className="size-5" suppressHydrationWarning />}
+                    <span>{rollLabel}</span>
+                    {canRoll ? <kbd className="hidden rounded border border-black/20 bg-black/10 px-1.5 text-[10px] font-semibold md:inline">Space</kbd> : null}
+                  </button>
+                </div>
               </div>
-            </div>
-          </div>
+              <p className="sr-only sm:hidden" aria-live="polite">{statusLine}</p>
+
+              {revealCard ? <CardReveal card={revealCard} cardNumber={currentCardNumber} deckLength={deck.length} onPlay={dismissReveal} /> : null}
+
+              {showVictory && scorecard ? (
+                <VictoryOverlay
+                  scorecard={scorecard}
+                  points={points}
+                  laps={laps}
+                  injects={revealedInjects.length}
+                  onClose={() => setShowVictory(false)}
+                  onDownload={downloadScorecard}
+                  onRestart={resetBoard}
+                />
+              ) : null}
+            </>
+          )}
         </div>
 
-        <aside className="flex min-h-[32rem] flex-col border-t border-border bg-card/85 xl:border-l xl:border-t-0">
-          <div className="border-b border-border p-5">
-            <div className="mb-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <Badge variant={activeCard.kind === "inject" ? "secondary" : "outline"}>{activeCard.stage}</Badge>
-                <span className="text-xs font-medium uppercase tracking-normal text-muted-foreground">
-                  Card {currentCardNumber} of {deck.length}
-                </span>
-              </div>
-              <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-background">
-                <div className="h-full bg-primary transition-all duration-500" style={{ width: `${deckProgressPercent}%` }} />
-              </div>
-            </div>
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              {isCurrentCardResolved ? (
-                <CheckCircle2 className="size-4 text-primary" suppressHydrationWarning />
-              ) : (
-                <Lock className="size-4 text-accent" suppressHydrationWarning />
-              )}
-              {isCurrentCardResolved ? "Ready for the next roll" : "Answer required before the next roll"}
-            </div>
-            <h2 className="mt-3 text-2xl font-semibold leading-8 text-foreground">{activeCard.title}</h2>
-            <p className="mt-4 text-base leading-8 text-muted-foreground">{activeCard.text}</p>
-            <div className="mt-4 rounded-md border border-primary/25 bg-primary/10 p-3">
-              <p className="text-xs font-semibold uppercase tracking-normal text-primary">Turn Goal</p>
-              <p className="mt-2 text-sm leading-6 text-muted-foreground">{activeCard.goal}</p>
-            </div>
-          </div>
+        <aside className="flex min-h-[32rem] flex-col border-t border-white/10 bg-[#0b1117] xl:min-h-0 xl:border-l xl:border-t-0">
+          <div className="flex-1 space-y-4 overflow-y-auto p-4 sm:p-5">
+            <GameCardPanel
+              card={activeCard}
+              cardNumber={currentCardNumber}
+              deckLength={deck.length}
+              isResolved={isCurrentCardResolved}
+              landedLabel={landedSpace ? `${landedSpace.label} · ${toneMeta[landedSpace.tone].label}` : null}
+            />
 
-          <div className="flex-1 space-y-4 overflow-y-auto p-5">
-            {scorecard ? (
-              <ScorecardPanel
-                scorecard={scorecard}
-                onCopy={copyScorecard}
-                onDownload={downloadScorecard}
-              />
-            ) : null}
+            {scorecard ? <ScorecardPanel scorecard={scorecard} points={points} onCopy={copyScorecard} onDownload={downloadScorecard} onCelebrate={() => setShowVictory(true)} /> : null}
 
             {!scorecard && activeCard.kind !== "brief" ? (
-              <div className="space-y-3 rounded-md border border-border bg-background/45 p-4">
-                <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-                  <MessageSquare className="size-4 text-primary" suppressHydrationWarning />
-                  Team answer
+              <div className="space-y-3 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                    <MessageSquare className="size-4 text-primary" suppressHydrationWarning />
+                    Team answer
+                  </div>
+                  {!isCurrentCardResolved ? (
+                    <span className="text-[11px] font-semibold text-primary/80">+{POINTS.written} pts</span>
+                  ) : (
+                    <span className="flex items-center gap-1 text-[11px] font-semibold text-primary">
+                      <CheckCircle2 className="size-3.5" suppressHydrationWarning /> Captured
+                    </span>
+                  )}
                 </div>
                 <Textarea
+                  ref={answerRef}
                   value={teamResponse}
                   onChange={(event) => setTeamResponse(event.target.value)}
-                  placeholder="Capture one sentence. Example: We isolate the account, preserve mailbox logs, and notify the incident owner."
-                  className="min-h-[96px]"
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && teamResponse.trim()) {
+                      event.preventDefault();
+                      captureResponse(false);
+                    }
+                  }}
+                  placeholder={
+                    isCurrentCardResolved
+                      ? "Answer captured. Roll when the team is ready."
+                      : "Capture one sentence. Example: We isolate the account, preserve mailbox logs, and notify the incident owner."
+                  }
+                  className="min-h-[96px] rounded-xl border-white/10 bg-black/30"
                   disabled={isCurrentCardResolved}
                 />
                 <div className="grid gap-2 sm:grid-cols-2">
-                  <Button variant="secondary" onClick={() => captureResponse(false)} disabled={isCurrentCardResolved || !teamResponse.trim()}>
+                  <Button className="rounded-xl" onClick={() => captureResponse(false)} disabled={isCurrentCardResolved || !teamResponse.trim()}>
                     Capture Answer
                   </Button>
-                  <Button variant="outline" onClick={() => captureResponse(true)} disabled={isCurrentCardResolved}>
-                    Discussed Aloud
+                  <Button variant="outline" className="rounded-xl border-white/15" onClick={() => captureResponse(true)} disabled={isCurrentCardResolved}>
+                    Discussed Aloud · +{POINTS.aloud}
                   </Button>
                 </div>
+                {!isCurrentCardResolved ? (
+                  <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                    <Keyboard className="size-3.5" suppressHydrationWarning /> Ctrl + Enter to capture
+                  </p>
+                ) : null}
                 {learningMoment ? (
-                  <div className="rounded-md border border-primary/25 bg-primary/10 p-3">
+                  <div className="learning-beat rounded-xl border border-primary/25 bg-primary/10 p-3">
                     <div className="flex items-center gap-2 text-sm font-medium text-primary">
                       <Sparkles className="size-4" suppressHydrationWarning />
                       Learning beat
@@ -546,10 +936,12 @@ export function TabletopBoardSession({
             ) : null}
 
             {activeInject ? (
-              <div className="rounded-md border border-accent/35 bg-accent/10 p-4">
+              <div className="rounded-2xl border border-orange-400/30 bg-orange-500/10 p-4">
                 <div className="flex items-center justify-between gap-2">
-                  <p className="text-sm font-medium text-accent">Latest Inject</p>
-                  <Badge variant="outline">D20: {activeInject.roll}</Badge>
+                  <p className="flex items-center gap-2 text-sm font-semibold text-orange-300">
+                    <Zap className="size-4" suppressHydrationWarning /> Latest twist
+                  </p>
+                  <Badge variant="outline" className="border-orange-400/40 text-orange-200">D20 · {activeInject.roll}</Badge>
                 </div>
                 <p className="mt-2 text-sm leading-6 text-muted-foreground">{activeInject.text}</p>
                 <p className="mt-3 text-sm leading-6 text-foreground">{activeInject.followUpQuestion}</p>
@@ -568,45 +960,435 @@ export function TabletopBoardSession({
               onQuickAsk={askAssistant}
             />
 
-            <Button variant="outline" className="w-full" onClick={() => setIsNotesOpen((current) => !current)}>
-              <NotebookPen className="size-4" suppressHydrationWarning />
-              {isNotesOpen ? "Hide Notes" : "Open Notes"}
-            </Button>
+            <div className="rounded-2xl border border-white/10 bg-white/[0.03]">
+              <button
+                type="button"
+                className="flex w-full items-center justify-between gap-2 p-4 text-sm font-semibold text-foreground"
+                onClick={() => setIsNotesOpen((current) => !current)}
+                aria-expanded={isNotesOpen}
+              >
+                <span className="flex items-center gap-2">
+                  <NotebookPen className="size-4 text-primary" suppressHydrationWarning />
+                  Session notes
+                  {notes.trim() ? <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] text-primary">{notes.trim().split("\n").length}</span> : null}
+                </span>
+                <span className="text-xs text-muted-foreground">{isNotesOpen ? "Hide" : "Open"}</span>
+              </button>
+              {isNotesOpen ? (
+                <div className="px-4 pb-4">
+                  <Textarea
+                    value={notes}
+                    onChange={(event) => setNotes(event.target.value)}
+                    placeholder="Running notes stay visible here: decisions, unclear answers, and improvements."
+                    className="min-h-[140px] rounded-xl border-white/10 bg-black/30"
+                  />
+                </div>
+              ) : null}
+            </div>
 
-            {isNotesOpen ? (
-              <Textarea
-                value={notes}
-                onChange={(event) => setNotes(event.target.value)}
-                placeholder="Running notes stay visible here: decisions, unclear answers, and improvements."
-                className="min-h-[140px]"
-              />
-            ) : null}
-          </div>
-
-          <div className="border-t border-border p-5">
-            {actionNotice ? (
-              <p className="mb-3 rounded-md border border-accent/30 bg-accent/10 p-3 text-sm leading-6 text-accent">{actionNotice}</p>
-            ) : null}
-            <Button size="lg" className="w-full" onClick={roll} disabled={isRolling || isGeneratingInject || isInjectOverlayOpen || Boolean(scorecard)}>
-              <Dices className="size-5" suppressHydrationWarning />
-              {isGeneratingInject
-                ? "Drawing Consequence..."
-                : isRolling
-                  ? "Rolling..."
-                  : isFinalCard && isCurrentCardResolved
-                    ? "Finish Tabletop"
-                    : hasStarted
-                      ? "Roll Next Card"
-                      : "Roll To Begin"}
-            </Button>
-            <p className="mt-3 text-center text-xs leading-5 text-muted-foreground">
-              {rollResult > 0 ? `Last roll: ${rollResult}. ` : ""}
-              High rolls can trigger a short consequence based on the team&apos;s last answer.
+            <p className="text-center text-[11px] leading-5 text-muted-foreground/70">
+              {rollResult > 0 ? `Last pressure roll: ${rollResult}. ` : ""}Drag to orbit · scroll to zoom · hover spaces for details
             </p>
           </div>
         </aside>
       </div>
     </section>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* HUD pieces                                                          */
+/* ------------------------------------------------------------------ */
+
+function PlayerHud({
+  pawn,
+  points,
+  laps,
+  deckLength,
+  deckIndex,
+  resolvedCount,
+  pops,
+}: {
+  pawn: PawnOption;
+  points: number;
+  laps: number;
+  deckLength: number;
+  deckIndex: number;
+  resolvedCount: number;
+  pops: PointPop[];
+}) {
+  return (
+    <div className="hud-glass pointer-events-auto relative flex items-center gap-3 rounded-2xl p-2.5 pr-4">
+      <PawnOrb pawn={pawn} size="md" />
+      <div className="min-w-0">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/55">{pawn.name}</p>
+        <div className="flex items-baseline gap-1.5">
+          <AnimatedNumber value={points} className="text-xl font-black tabular-nums text-white" />
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-amber-300/90">pts</span>
+          {laps > 0 ? <span className="ml-1 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-bold text-primary">Lap {laps}</span> : null}
+        </div>
+        <div className="mt-1 flex max-w-[11rem] flex-wrap gap-1" aria-label={`${resolvedCount} of ${deckLength} cards resolved`}>
+          {Array.from({ length: deckLength }).map((_, index) => (
+            <span
+              key={index}
+              className={`h-1.5 w-2.5 rounded-full transition-all duration-500 ${
+                index < resolvedCount ? "bg-primary shadow-[0_0_6px_rgba(35,211,155,0.8)]" : index === deckIndex ? "bg-amber-300/80" : "bg-white/15"
+              }`}
+            />
+          ))}
+        </div>
+      </div>
+      <div className="pointer-events-none absolute left-16 top-full">
+        {pops.map((pop) => (
+          <div key={pop.id} className={`point-pop whitespace-nowrap text-sm font-black ${pop.amount < 0 ? "text-rose-400" : "text-amber-300"}`}>
+            {pop.amount > 0 ? "+" : ""}
+            {pop.amount} <span className="text-xs font-semibold text-white/80">{pop.label}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PawnSwitcher({ selectedPawn, onSelect }: { selectedPawn: PawnKey; onSelect: (key: PawnKey) => void }) {
+  return (
+    <div className="hud-glass hidden items-center gap-1.5 rounded-full p-1.5 sm:flex">
+      {pawnOptions.map((pawn) => (
+        <button
+          key={pawn.key}
+          type="button"
+          onClick={() => {
+            onSelect(pawn.key);
+            gameSounds.click();
+          }}
+          className={`size-6 rounded-full border-2 transition hover:scale-110 ${pawn.key === selectedPawn ? "border-white" : "border-transparent opacity-70"}`}
+          style={{ background: `radial-gradient(circle at 35% 30%, #fff8, ${pawn.color} 45%, ${pawn.accent})` }}
+          aria-label={`Play as ${pawn.name}`}
+          aria-pressed={pawn.key === selectedPawn}
+          title={pawn.name}
+        />
+      ))}
+    </div>
+  );
+}
+
+function PawnOrb({ pawn, size }: { pawn: PawnOption; size: "md" | "lg" }) {
+  const dimension = size === "lg" ? "size-20" : "size-11";
+  return (
+    <span
+      className={`relative flex ${dimension} shrink-0 items-center justify-center rounded-full`}
+      style={{
+        background: `radial-gradient(circle at 35% 28%, rgba(255,255,255,0.75), ${pawn.color} 42%, ${pawn.accent} 100%)`,
+        boxShadow: `0 0 0 2px rgba(255,255,255,0.12), 0 8px 24px ${pawn.color}55`,
+      }}
+    >
+      <span className="absolute inset-[22%] rounded-full border border-white/40" />
+    </span>
+  );
+}
+
+function AnimatedNumber({ value, className }: { value: number; className?: string }) {
+  const [display, setDisplay] = useState(value);
+  const fromRef = useRef(value);
+
+  useEffect(() => {
+    const from = fromRef.current;
+    if (from === value) {
+      return;
+    }
+    const start = performance.now();
+    let frame = 0;
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - start) / 700);
+      const eased = 1 - Math.pow(1 - t, 3);
+      const next = Math.round(from + (value - from) * eased);
+      setDisplay(next);
+      fromRef.current = next;
+      if (t < 1) {
+        frame = requestAnimationFrame(tick);
+      }
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [value]);
+
+  return <span className={className}>{display.toLocaleString()}</span>;
+}
+
+function DiceFace({ kind, value, rolling, hot = false }: { kind: "d20" | "d6"; value: number; rolling: boolean; hot?: boolean }) {
+  const label = kind === "d20" ? `Pressure die: ${value || "not rolled"}` : `Move die: ${value || "not rolled"}`;
+  if (kind === "d20") {
+    return (
+      <span className={`d20-face ${rolling ? "dice-roll-face" : value ? "dice-roll-landed" : ""} ${hot && !rolling ? "d20-face-hot" : ""}`} aria-label={label} title="Pressure die (d20)">
+        <span>{rolling ? "?" : value || "–"}</span>
+      </span>
+    );
+  }
+
+  const pips: Record<number, number[]> = {
+    1: [4],
+    2: [0, 8],
+    3: [0, 4, 8],
+    4: [0, 2, 6, 8],
+    5: [0, 2, 4, 6, 8],
+    6: [0, 2, 3, 5, 6, 8],
+  };
+  const shown = rolling ? [4] : pips[value] ?? [];
+  return (
+    <span className={`d6-face ${rolling ? "dice-roll-face" : value ? "dice-roll-landed" : ""}`} aria-label={label} title="Move die (d6)">
+      {Array.from({ length: 9 }).map((_, index) => (
+        <span key={index} className={`rounded-full ${shown.includes(index) ? (value === 1 && !rolling ? "bg-red-600" : "bg-[#10221f]") : "bg-transparent"}`} />
+      ))}
+    </span>
+  );
+}
+
+function CharacterSelect({
+  selectedPawn,
+  onSelect,
+  onEnter,
+  onClassicMode,
+  scenario,
+  cardCount,
+}: {
+  selectedPawn: PawnKey;
+  onSelect: (key: PawnKey) => void;
+  onEnter: () => void;
+  onClassicMode: () => void;
+  scenario: string;
+  cardCount: number;
+}) {
+  return (
+    <div className="absolute inset-0 z-10 flex items-center justify-center overflow-y-auto bg-[#05080c]/80 p-4 backdrop-blur-sm">
+      <div className="splash-panel w-full max-w-3xl rounded-3xl border border-white/10 bg-[#0b1218]/90 p-6 text-center shadow-2xl shadow-black/60 sm:p-8">
+        <p className="text-[11px] font-bold uppercase tracking-[0.3em] text-primary">Table Mode</p>
+        <h2 className="mt-2 text-3xl font-black text-white sm:text-5xl">Pull up a chair.</h2>
+        <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-white/65 sm:text-base">
+          {scenario}. Roll to move around the board, pick routes at forks, draw {cardCount} cards, and earn readiness points for every decision the team captures.
+        </p>
+
+        <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          {pawnOptions.map((pawn) => {
+            const active = pawn.key === selectedPawn;
+            return (
+              <button
+                key={pawn.key}
+                type="button"
+                onClick={() => onSelect(pawn.key)}
+                aria-pressed={active}
+                className={`pawn-card group rounded-2xl border p-4 text-center transition ${active ? "pawn-card-active" : "border-white/10 bg-white/[0.03] hover:border-white/25"}`}
+                style={{ "--pawn": pawn.color } as CSSProperties}
+              >
+                <span className="mx-auto block w-fit transition-transform duration-300 group-hover:-translate-y-1">
+                  <PawnOrb pawn={pawn} size="lg" />
+                </span>
+                <span className="mt-3 block text-base font-bold text-white">{pawn.name}</span>
+                <span className="mt-1 block text-xs leading-5 text-white/55">{pawn.description}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="mt-6 grid gap-2 text-left text-xs text-white/60 sm:grid-cols-3">
+          <HowTo icon={Dices} title="Roll" text="d6 moves your pawn. The d20 adds pressure." />
+          <HowTo icon={MessageSquare} title="Answer" text="Each card needs a team answer before the next roll." />
+          <HowTo icon={Zap} title="React" text="Shortcuts are faster but riskier. Twist spaces draw consequences." />
+        </div>
+
+        <div className="mt-7 flex flex-col justify-center gap-3 sm:flex-row">
+          <Button size="lg" className="rounded-full px-8 text-base font-bold" onClick={onEnter} autoFocus>
+            <Gamepad2 className="size-5" suppressHydrationWarning />
+            Enter The Table
+          </Button>
+          <Button size="lg" variant="outline" className="rounded-full border-white/15" onClick={onClassicMode}>
+            <ListTodo className="size-5" suppressHydrationWarning />
+            Classic Mode
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function HowTo({ icon: Icon, title, text }: { icon: LucideIcon; title: string; text: string }) {
+  return (
+    <div className="flex items-start gap-2.5 rounded-xl border border-white/5 bg-white/[0.03] p-3">
+      <Icon className="mt-0.5 size-4 shrink-0 text-primary" suppressHydrationWarning />
+      <div>
+        <p className="font-semibold text-white/90">{title}</p>
+        <p className="mt-0.5 leading-5">{text}</p>
+      </div>
+    </div>
+  );
+}
+
+function CardReveal({ card, cardNumber, deckLength, onPlay }: { card: BoardCard; cardNumber: number; deckLength: number; onPlay: () => void }) {
+  const meta = cardKindMeta[card.kind];
+  const Icon = meta.icon;
+  return (
+    <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/55 p-4 backdrop-blur-[2px]" onClick={onPlay} role="dialog" aria-modal="true" aria-labelledby="reveal-title">
+      <div
+        className="card-reveal w-full max-w-sm overflow-hidden rounded-3xl bg-[#f6f1e4] text-[#16212a] shadow-[0_30px_80px_rgba(0,0,0,0.6)]"
+        style={{ "--card": meta.color } as CSSProperties}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="relative px-5 pb-4 pt-5 text-white" style={{ background: `linear-gradient(135deg, ${meta.color}, ${shadeHex(meta.color, -0.25)})` }}>
+          <div className="flex items-center justify-between">
+            <span className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.2em]">
+              <Icon className="size-4" suppressHydrationWarning /> {meta.label}
+            </span>
+            <span className="text-xs font-semibold opacity-80">
+              {cardNumber} / {deckLength}
+            </span>
+          </div>
+          <p className="mt-2 text-xs font-semibold uppercase tracking-[0.18em] opacity-75">{card.stage}</p>
+          <h3 id="reveal-title" className="mt-1 text-2xl font-black">
+            {card.title}
+          </h3>
+        </div>
+        <div className="px-5 py-5">
+          <p className="line-clamp-[8] text-base leading-7">{card.text}</p>
+          <div className="mt-4 rounded-2xl border border-black/10 bg-black/[0.04] p-3">
+            <p className="text-[10px] font-bold uppercase tracking-[0.2em]" style={{ color: shadeHex(meta.color, -0.15) }}>
+              Turn goal
+            </p>
+            <p className="mt-1 text-sm leading-6 text-[#16212a]/80">{card.goal}</p>
+          </div>
+          <button type="button" onClick={onPlay} className="mt-5 w-full rounded-full py-3 text-sm font-bold text-white transition hover:brightness-110" style={{ background: meta.color }} autoFocus>
+            Play this card
+          </button>
+          <p className="mt-2 text-center text-[11px] text-[#16212a]/50">Press Enter or click anywhere</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GameCardPanel({
+  card,
+  cardNumber,
+  deckLength,
+  isResolved,
+  landedLabel,
+}: {
+  card: BoardCard;
+  cardNumber: number;
+  deckLength: number;
+  isResolved: boolean;
+  landedLabel: string | null;
+}) {
+  const meta = cardKindMeta[card.kind];
+  const Icon = meta.icon;
+  return (
+    <div key={card.id} className="game-card-panel overflow-hidden rounded-2xl border border-white/10 bg-[#f6f1e4] text-[#16212a] shadow-xl shadow-black/30">
+      <div className="px-4 py-3 text-white" style={{ background: `linear-gradient(135deg, ${meta.color}, ${shadeHex(meta.color, -0.25)})` }}>
+        <div className="flex items-center justify-between gap-2">
+          <span className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.2em]">
+            <Icon className="size-4" suppressHydrationWarning /> {meta.label} · {card.stage}
+          </span>
+          <span className="text-[11px] font-semibold opacity-85">
+            Card {cardNumber} of {deckLength}
+          </span>
+        </div>
+        <h2 className="mt-1.5 text-xl font-black leading-7">{card.title}</h2>
+      </div>
+      <div className="space-y-3 p-4">
+        <p className="text-[15px] leading-7">{card.text}</p>
+        <div className="rounded-xl border border-black/10 bg-black/[0.04] p-3">
+          <p className="text-[10px] font-bold uppercase tracking-[0.2em]" style={{ color: shadeHex(meta.color, -0.15) }}>
+            Turn goal
+          </p>
+          <p className="mt-1 text-sm leading-6 text-[#16212a]/80">{card.goal}</p>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+          <span className={`flex items-center gap-1.5 font-semibold ${isResolved ? "text-emerald-700" : "text-amber-700"}`}>
+            {isResolved ? <CheckCircle2 className="size-4" suppressHydrationWarning /> : <Lock className="size-4" suppressHydrationWarning />}
+            {isResolved ? "Ready for the next roll" : "Answer required before rolling"}
+          </span>
+          {landedLabel ? <span className="rounded-full bg-black/[0.06] px-2 py-0.5 font-medium text-[#16212a]/70">On: {landedLabel}</span> : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function VictoryOverlay({
+  scorecard,
+  points,
+  laps,
+  injects,
+  onClose,
+  onDownload,
+  onRestart,
+}: {
+  scorecard: GameScorecard;
+  points: number;
+  laps: number;
+  injects: number;
+  onClose: () => void;
+  onDownload: () => void;
+  onRestart: () => void;
+}) {
+  const confetti = useMemo(
+    () =>
+      Array.from({ length: 36 }).map((_, index) => ({
+        left: `${(index * 37) % 100}%`,
+        delay: `${(index % 9) * 0.12}s`,
+        duration: `${2.4 + (index % 5) * 0.35}s`,
+        color: ["#23d39b", "#f5b83d", "#68a8ff", "#d98cff", "#f97316"][index % 5],
+        rotate: `${(index * 47) % 360}deg`,
+      })),
+    [],
+  );
+  return (
+    <div className="absolute inset-0 z-30 flex items-center justify-center overflow-hidden bg-black/70 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="victory-title">
+      {confetti.map((piece, index) => (
+        <span
+          key={index}
+          className="confetti-piece"
+          style={{ left: piece.left, animationDelay: piece.delay, animationDuration: piece.duration, background: piece.color, "--rotate": piece.rotate } as CSSProperties}
+        />
+      ))}
+      <div className="splash-panel relative w-full max-w-md rounded-3xl border border-white/10 bg-[#0b1218]/95 p-7 text-center shadow-2xl">
+        <Trophy className="mx-auto size-10 text-amber-300" suppressHydrationWarning />
+        <p id="victory-title" className="mt-2 text-[11px] font-bold uppercase tracking-[0.3em] text-primary">
+          Exercise complete
+        </p>
+        <div className="score-ring mx-auto mt-5 flex size-36 items-center justify-center rounded-full" style={{ "--score": scorecard.overallScore } as CSSProperties}>
+          <div className="flex size-28 flex-col items-center justify-center rounded-full bg-[#0b1218]">
+            <span className="text-4xl font-black text-white">{scorecard.overallScore}</span>
+            <span className="text-[10px] font-semibold uppercase tracking-widest text-white/50">/ 100</span>
+          </div>
+        </div>
+        <p className="mt-4 text-2xl font-black text-white">{scorecard.readinessTier}</p>
+        <div className="mt-4 grid grid-cols-3 gap-2 text-center">
+          {[
+            { label: "Points", value: points.toLocaleString() },
+            { label: "Laps", value: laps },
+            { label: "Twists", value: injects },
+          ].map((item) => (
+            <div key={item.label} className="rounded-xl border border-white/10 bg-white/[0.03] p-2">
+              <p className="text-lg font-black text-white">{item.value}</p>
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-white/50">{item.label}</p>
+            </div>
+          ))}
+        </div>
+        <p className="mt-4 text-sm leading-6 text-white/65">{scorecard.nextTabletop}</p>
+        <div className="mt-6 grid gap-2 sm:grid-cols-2">
+          <Button className="rounded-full" onClick={onDownload}>
+            <Download className="size-4" suppressHydrationWarning />
+            Download scorecard
+          </Button>
+          <Button variant="outline" className="rounded-full border-white/15" onClick={onClose}>
+            <Award className="size-4" suppressHydrationWarning />
+            Review details
+          </Button>
+        </div>
+        <button type="button" onClick={onRestart} className="mt-4 text-xs font-semibold text-white/50 underline-offset-4 hover:text-white hover:underline">
+          Play again
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -632,25 +1414,19 @@ function AssistantPanel({
   onQuickAsk: (question: string) => void;
 }) {
   return (
-    <div className="rounded-md border border-primary/25 bg-primary/5 p-4">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
+    <div className="rounded-2xl border border-primary/20 bg-primary/[0.05]">
+      <button type="button" className="flex w-full items-center justify-between gap-3 p-4" onClick={onToggle} aria-expanded={isOpen}>
+        <span className="flex items-center gap-2">
           <Bot className="size-4 text-primary" suppressHydrationWarning />
-          <p className="text-sm font-medium text-foreground">AI Coach</p>
-        </div>
-        <Button variant="ghost" size="sm" onClick={onToggle}>
-          {isOpen ? "Close" : "Ask"}
-        </Button>
-      </div>
+          <span className="text-sm font-semibold text-foreground">AI Coach</span>
+        </span>
+        <span className="text-xs text-muted-foreground">{isOpen ? "Close" : "Ask for a hint"}</span>
+      </button>
       {isOpen ? (
-        <div className="mt-3 space-y-3">
+        <div className="space-y-3 px-4 pb-4">
           <div className="flex flex-wrap gap-2">
-            {[
-              "What should we decide next?",
-              "What would our IRP say here?",
-              "Explain this for non-technical leaders.",
-            ].map((item) => (
-              <Button key={item} variant="outline" size="sm" onClick={() => onQuickAsk(item)} disabled={isThinking}>
+            {["What should we decide next?", "What would our IRP say here?", "Explain this for non-technical leaders."].map((item) => (
+              <Button key={item} variant="outline" size="sm" className="h-auto rounded-full border-white/15 py-1.5 text-xs" onClick={() => onQuickAsk(item)} disabled={isThinking}>
                 {item}
               </Button>
             ))}
@@ -659,18 +1435,14 @@ function AssistantPanel({
             value={question}
             onChange={(event) => onQuestionChange(event.target.value)}
             placeholder="Ask for help with the current situation."
-            className="min-h-[80px]"
+            className="min-h-[80px] rounded-xl border-white/10 bg-black/30"
           />
-          <Button variant="secondary" onClick={onAsk} disabled={isThinking || !question.trim()}>
-            <Lightbulb className="size-4" suppressHydrationWarning />
+          <Button variant="secondary" className="rounded-xl" onClick={onAsk} disabled={isThinking || !question.trim()}>
+            {isThinking ? <Loader2 className="size-4 animate-spin" suppressHydrationWarning /> : <Lightbulb className="size-4" suppressHydrationWarning />}
             {isThinking ? "Thinking..." : "Ask Coach"}
           </Button>
           {notice ? <p className="text-xs text-muted-foreground">{notice}</p> : null}
-          {answer ? (
-            <div className="rounded-md border border-border bg-background/55 p-3 text-sm leading-6 text-muted-foreground">
-              {answer}
-            </div>
-          ) : null}
+          {answer ? <div className="whitespace-pre-line rounded-xl border border-white/10 bg-black/30 p-3 text-sm leading-6 text-muted-foreground">{answer}</div> : null}
         </div>
       ) : null}
     </div>
@@ -679,45 +1451,61 @@ function AssistantPanel({
 
 function ScorecardPanel({
   scorecard,
+  points,
   onCopy,
   onDownload,
+  onCelebrate,
 }: {
   scorecard: GameScorecard;
+  points: number;
   onCopy: () => void;
   onDownload: () => void;
+  onCelebrate: () => void;
 }) {
   return (
-    <div className="rounded-md border border-primary/35 bg-primary/10 p-4">
-      <div className="flex items-center gap-2 text-primary">
-        <Trophy className="size-5" suppressHydrationWarning />
-        <p className="text-sm font-semibold uppercase tracking-normal">Final Scorecard</p>
+    <div className="rounded-2xl border border-primary/30 bg-primary/[0.07] p-4">
+      <div className="flex items-center justify-between gap-2 text-primary">
+        <span className="flex items-center gap-2">
+          <Trophy className="size-5" suppressHydrationWarning />
+          <p className="text-sm font-bold uppercase tracking-[0.18em]">Final Scorecard</p>
+        </span>
+        <button type="button" onClick={onCelebrate} className="text-xs font-semibold text-primary/80 hover:text-primary">
+          Show results
+        </button>
       </div>
-      <div className="mt-4 grid grid-cols-[auto_1fr] gap-4">
-        <div className="flex size-20 items-center justify-center rounded-full border border-primary/45 bg-background text-3xl font-bold text-primary">
-          {scorecard.overallScore}
+      <div className="mt-4 grid grid-cols-[auto_1fr] items-center gap-4">
+        <div className="score-ring flex size-20 items-center justify-center rounded-full" style={{ "--score": scorecard.overallScore } as CSSProperties}>
+          <div className="flex size-16 items-center justify-center rounded-full bg-[#0b1117] text-2xl font-black text-white">{scorecard.overallScore}</div>
         </div>
         <div>
-          <p className="text-xl font-semibold text-foreground">{scorecard.readinessTier}</p>
+          <p className="text-xl font-black text-foreground">{scorecard.readinessTier}</p>
+          <p className="text-xs font-semibold text-amber-300">{points.toLocaleString()} readiness points</p>
           <p className="mt-1 text-sm leading-6 text-muted-foreground">{scorecard.nextTabletop}</p>
         </div>
       </div>
       <div className="mt-4 space-y-2">
         {scorecard.categories.map((category) => (
-          <div key={category.id} className="rounded-md border border-border bg-background/45 p-3">
+          <div key={category.id} className="rounded-xl border border-white/10 bg-black/20 p-3">
             <div className="flex items-center justify-between gap-2">
               <p className="text-sm font-medium text-foreground">{category.label}</p>
-              <Badge variant="outline">{category.score}/100</Badge>
+              <span className="text-xs font-bold text-foreground">{category.score}</span>
+            </div>
+            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10">
+              <div
+                className="score-bar h-full rounded-full"
+                style={{ width: `${category.score}%`, background: category.score >= 75 ? "#23d39b" : category.score >= 50 ? "#f5b83d" : "#f97316" }}
+              />
             </div>
             <p className="mt-2 text-xs leading-5 text-muted-foreground">{category.summary}</p>
           </div>
         ))}
       </div>
       <div className="mt-4 grid gap-2 sm:grid-cols-2">
-        <Button variant="outline" onClick={onCopy}>
+        <Button variant="outline" className="rounded-xl border-white/15" onClick={onCopy}>
           <Clipboard className="size-4" suppressHydrationWarning />
           Copy
         </Button>
-        <Button variant="secondary" onClick={onDownload}>
+        <Button variant="secondary" className="rounded-xl" onClick={onDownload}>
           <Download className="size-4" suppressHydrationWarning />
           Download
         </Button>
@@ -728,43 +1516,48 @@ function ScorecardPanel({
 
 function TableScenePlaceholder({ label }: { label: string }) {
   return (
-    <div className="flex h-full min-h-[28rem] w-full items-center justify-center p-6">
-      <div className="relative aspect-[16/10] w-full max-w-4xl overflow-hidden rounded-lg border border-primary/25 bg-[radial-gradient(circle_at_center,rgba(35,211,155,0.16),transparent_32rem),linear-gradient(135deg,rgba(91,58,36,0.5),rgba(13,26,38,0.8))] p-6 shadow-2xl shadow-black/30">
-        <div className="absolute inset-8 rounded-lg border border-primary/30 bg-background/35" />
-        <div className="absolute inset-10 grid grid-cols-6 grid-rows-6 gap-2">
+    <div className="flex h-full min-h-[28rem] w-full items-center justify-center bg-[radial-gradient(circle_at_50%_40%,rgba(255,217,160,0.12),transparent_60%)] p-6">
+      <div className="placeholder-board relative aspect-square w-full max-w-[32rem] rounded-2xl p-3 shadow-2xl shadow-black/60">
+        <div className="grid h-full grid-cols-6 grid-rows-6 gap-[3px] rounded-lg bg-[#1c2a2e] p-[3px]">
           {Array.from({ length: 36 }).map((_, index) => {
             const row = Math.floor(index / 6);
             const col = index % 6;
             const isTrack = row === 0 || row === 5 || col === 0 || col === 5;
-            const isCorner = isTrack && (row === 0 || row === 5) && (col === 0 || col === 5);
             if (!isTrack) {
-              return <div key={index} />;
+              return null;
             }
-
+            const isCorner = (row === 0 || row === 5) && (col === 0 || col === 5);
+            const tones = Object.values(toneMeta);
+            const tone = tones[index % tones.length];
             return (
               <div
                 key={index}
-                className={`rounded-md border ${
-                  isCorner ? "border-primary/45 bg-primary/20" : index === 35 ? "border-accent/50 bg-accent/15" : "border-primary/25 bg-primary/10"
-                }`}
+                className="rounded-[3px] bg-[#f6f1e4]"
+                style={{
+                  gridRow: row + 1,
+                  gridColumn: col + 1,
+                  background: isCorner ? tone.color : undefined,
+                  boxShadow: isCorner ? undefined : `inset 0 6px 0 ${tone.color}`,
+                }}
               />
             );
           })}
-        </div>
-        <div className="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-3 rounded-lg border border-border bg-background/80 p-5 text-center backdrop-blur">
-          {label.includes("Loading") ? (
-            <Loader2 className="size-8 animate-spin text-primary" suppressHydrationWarning />
-          ) : (
-            <Play className="size-8 text-primary" suppressHydrationWarning />
-          )}
-          <p className="text-sm font-medium text-foreground">{label}</p>
-          <p className="max-w-xs text-xs leading-5 text-muted-foreground">
-            The page stays lightweight until the 3D board is opened.
-          </p>
+          <div className="col-span-4 col-start-2 row-span-4 row-start-2 flex flex-col items-center justify-center gap-2 rounded-md bg-[radial-gradient(circle,#15514a,#081b20)] text-center">
+            <Loader2 className={`size-7 text-primary ${label.includes("Setting") ? "animate-spin" : "hidden"}`} suppressHydrationWarning />
+            <p className="text-xs font-black tracking-[0.25em] text-[#7ff5d0]">TABLETOPFORGE</p>
+            <p className="text-sm font-medium text-white/80">{label}</p>
+          </div>
         </div>
       </div>
     </div>
   );
+}
+
+function shadeHex(hex: string, amount: number) {
+  const value = hex.replace("#", "");
+  const channels = [0, 2, 4].map((offset) => parseInt(value.slice(offset, offset + 2), 16));
+  const adjusted = channels.map((channel) => Math.max(0, Math.min(255, Math.round(amount < 0 ? channel * (1 + amount) : channel + (255 - channel) * amount))));
+  return `#${adjusted.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
 }
 
 function buildBoardDeck(exercise: GeneratedExercise): BoardCard[] {
@@ -1196,12 +1989,14 @@ function buildGameScorecardMarkdown(
   decisions: DecisionPathEntry[],
   injects: RevealedGameInject[],
   notes: string,
+  points = 0,
 ) {
   return [
     `# ${exercise.overview.organization} Tabletop Game Scorecard`,
     "",
     `Completed: ${scorecard.completedAt}`,
     `Overall: ${scorecard.overallScore}/100 (${scorecard.readinessTier})`,
+    `Readiness points earned: ${points}`,
     "",
     "## Category Scores",
     ...scorecard.categories.map((category) => `- ${category.label}: ${category.score}/100 - ${category.summary}`),
@@ -1236,6 +2031,7 @@ function buildGameScorecardHtml(
   decisions: DecisionPathEntry[],
   injects: RevealedGameInject[],
   notes: string,
+  points = 0,
 ) {
   const escape = (value: string | number) =>
     String(value)
@@ -1267,7 +2063,7 @@ function buildGameScorecardHtml(
 <body>
   <main>
     <h1>${escape(exercise.overview.organization)} Tabletop Game Scorecard</h1>
-    <p><span class="score">${scorecard.readinessTier} - ${scorecard.overallScore}/100</span></p>
+    <p><span class="score">${scorecard.readinessTier} - ${scorecard.overallScore}/100</span> &nbsp; ${points} readiness points</p>
     <p>${escape(exercise.overview.scenario)} | ${escape(exercise.overview.industry)} | ${escape(exercise.overview.maturityLevel)}</p>
     <h2>Category Scores</h2>
     <table><thead><tr><th>Category</th><th>Score</th><th>Summary</th></tr></thead><tbody>
